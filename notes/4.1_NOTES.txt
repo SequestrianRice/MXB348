@@ -1,0 +1,51 @@
+4.1 PREDICTIVE MODELLING
+	GOALS
+	- probability of customer being converted on RETURN visit.
+	- at any given stage of a customer journey, how many STEPS it will 	  take to reach a CONVERSION.
+
+RETURN     -- Session ID of 1 or greater for a customer journey.
+STAGE      --
+STEP       -- Each individual Order ID
+CONVERSION -- Only occurs at end of a session. 0 = no, 1 = yes.
+
+algorithms
+    # dependent variables
+    # explanatory variables (model features)
+    # assumptions
+    # model performance + evaluation
+
+what is the stage of a customer defined as?
+- time left before end of session
+- channel they are on
+
+CUSTOMER JOURNEY -- A complete session. [4.3.2 indicates this is the correct interpretation]
+
+4.1.1 PROBABILITY OF CONVERSION ON RETURN VISIT
+
+4.1.2 PREDICTION OF NUMBER OF STEPS IT WILL TAKE TO REACH CONVERSION
+
+NEW DATASET
+User_ID
+Session_ID
+First Touch Point
+Last Touch Point
+Total Number of Touch Points
+Total Time of Touch Points
+Conversion
+
+DATASET -- CONVERSIONS = 1
+User
+Session
+Unique Session Number -- memoryless customer assumption
+Order
+Channel
+Time Spent on Channel
+Total Number of Steps
+
+STAGE OF CUSTOMER JOURNEY
+step number they are currently in
+the channel they are on
+the time they have left -- this could be grouped (within minutes)
+ASSUMPTION: for a customer, all previous sessions do not have any impact on current session.
+
+Keeping it simple, STAGE could just mean the  + channel of the customer journey
