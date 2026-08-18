@@ -7,10 +7,48 @@ output: html_document
 
 ```{r setup, include=FALSE}
 setwd("D:/MXB348 - Work Integrated Learning")
-customer_journey <- read.csv("D:/MXB348 - Work Integrated Learning/data/customer_journey-4.csv"); read.csv("D:/MXB348 - Work Integrated Learning/data/results-3.csv")
-
+customer_journey <- read.csv("D:/MXB348 - Work Integrated Learning/data/customer_journey-4.csv"); 
+results <- read.csv("D:/MXB348 - Work Integrated Learning/data/results-3.csv")
+### Setting the working directory and opening the files
 ```
 
+```{r}
+install.packages(c(
+  "tidyverse",
+  "markovchain"
+))
+### Download relevant files
+```
+
+
+```{r}
+library(tidyverse)
+library(markovchain)
+### Load the relevant libraries
+```
+
+
+```{r}
+head(customer_journey)
+head(results)
+str(customer_journey)
+str(results)
+summary(customer_journey)
+summary(results)
+# Disp
+```
+```{r}
+journeys <- customer_journey %>%
+  left_join(
+    results,
+    by = c("user_id", "session_id")
+  )
+```
+
+
+```{r}
+View(journeys)
+```
 
 head(customer_journey)
 ### User Identification variable (user_id) (Discrete Integers)
@@ -24,8 +62,8 @@ Unique_Users = length(unique_id)
 ```
 
 ```{r}
-results <- read.csv("D:\Semester 2 2026\MXB348 - Work Integrated Learning/data/customer_journey-4.csv)
-head(results)
+str(customer_journey)
+str(results)
 ```
 
 ## Including Plots
