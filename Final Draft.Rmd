@@ -20,13 +20,11 @@ install.packages(c(
 ### Download relevant files
 ```
 
-
 ```{r}
 library(tidyverse)
 library(markovchain)
 ### Load the relevant libraries
 ```
-
 
 ```{r}
 head(customer_journey)
@@ -62,8 +60,18 @@ nrow(journeys)
 # Debugging point, ensures equivalent dimensions
 ```
 ```{r}
-### Formalising the Markov-chain transformation mechanism
+transitions <- journeys %>%
+  group_by(user_id, session_id) %>% # Each unique combination
+  arrange(order, .by_group = TRUE) %>% # Ensures ordinal categorization
+  mutate(
+    next_state = lead(channel) # Looks one row ahead and puts that value into a
+  ) %>% # new column called "next state"
+  ungroup() # Un-magnifying
+### Formalizing the Markov-chain transformation mechanism (Markov Property), 
+### by identifying what channel each customer moves to next.
 ```
+
+```{r}
 
 ```
 
