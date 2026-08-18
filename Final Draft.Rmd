@@ -140,6 +140,39 @@ P <- matrix(
 ### properties (Square matrix with probabilities that sum to 1).
 ```
 
+```{r}
+for (i in seq_len(nrow(transition_probs))) {
+
+  from <- transition_probs$channel[i]
+  to   <- transition_probs$next_state[i]
+
+  P[from, to] <-
+    transition_probs$probability[i]
+};
+P["Conversion", ] <- 0
+P["Conversion", "Conversion"] <- 1
+
+P["No Conversion", ] <- 0
+P["No Conversion", "No Conversion"] <- 1
+```
+
+```{r}
+customer_mc <- new(
+  "markovchain",
+  states = states,
+  transitionMatrix = P,
+  name = "Logickube Customer Journey"
+);
+customer_mc;
+View(P)
+### We have now constructed our first-order Markov Chain transition probability
+### matrix. We have also got a probability of 1 in both the "No Conversion" and
+### "Conversion" diagonal to represent them as absorbing states that symbolize
+### how at the end of every session, we end up with either a successful or 
+### unsuccessful conversion.
+### Instagram has the highest observed immediate transition probability 
+### conversion at approximately 25.64% with YouTube being the lowest at 25.09%.
+```
 
 ### Session Identification variable (user_id) (Ordinal Discrete Integers)
 ### A greater number simulates a later discrete time period
