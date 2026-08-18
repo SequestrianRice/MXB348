@@ -66,13 +66,78 @@ transitions <- journeys %>%
   mutate(
     next_state = lead(channel) # Looks one row ahead and puts that value into a
   ) %>% # new column called "next state"
-  ungroup() # Un-magnifying
+  ungroup();# Un-magnifying
+transitions <- transitions %>%
+  mutate(
+    next_state = case_when(
+      !is.na(next_state) ~ next_state, # "na" are now converted to
+      conversion == 1 ~ "Conversion",
+      conversion == 0 ~ "No Conversion" 
+    ) # Conversion's now act as an absorbing state in a Markov Chain.
+  ) # To symbolize the end of an individual tracked session.
+View(transitions %>%
+    select(
+      user_id,
+      session_id,
+      order,
+      channel,
+      next_state,
+      conversion
+    )
+)
 ### Formalizing the Markov-chain transformation mechanism (Markov Property), 
 ### by identifying what channel each customer moves to next.
 ```
 
 ```{r}
+transition_counts <- transitions %>%
+  count(
+    channel,
+    next_state,
+    name = "n"
+  );
+View(transition_counts)
+### This is the point in which we can begin to really interpret our data. Since
+### now we have sample count data associated with each possible unique tracked 
+### transition for every person and each of their sessions. 
+```
 
+```{r}
+transition_probs <- transition_counts %>%
+  group_by(channel) %>%
+  mutate(
+    probability = n / sum(n)
+  ) %>%
+  ungroup()
+View(transition_probs)
+### Converts the count data into probabilities
+```
+
+```{r}
+transition_probs %>%
+  filter(next_state == "Conversion") %>%
+  arrange(desc(probability))
+### A tibble that shows the probability given the sample data of each channel
+### turning into a conversion.
+```
+```{r}
+states <- sort(
+  unique(
+    c(
+      transitions$channel,
+      transitions$next_state
+    )
+  )
+);
+P <- matrix(
+  0,
+  nrow = length(states),
+  ncol = length(states),
+  dimnames = list(states, states) # a R^(10x10) matrix with 
+) # [channel no conversion conversion].
+### This is all to create an empty/unfilled transition probability matrix where 
+### after this section we will fill it with data that satisfy the necessary 
+### properties (Square matrix with probabilities that sum to 1).
 ```
 
 
