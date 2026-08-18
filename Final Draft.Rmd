@@ -1,0 +1,39 @@
+---
+title: "Final Draft"
+author: "Sebastian"
+date: "2026-08-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("D:/MXB348 - Work Integrated Learning")
+customer_journey <- read.csv("D:/MXB348 - Work Integrated Learning/data/customer_journey-4.csv"); read.csv("D:/MXB348 - Work Integrated Learning/data/results-3.csv")
+
+```
+
+
+head(customer_journey)
+### User Identification variable (user_id) (Discrete Integers)
+unique_id <- unique(customer_journey$user_id)
+Unique_Users = length(unique_id)
+### Session Identification variable (user_id) (Ordinal Discrete Integers)
+### A greater number simulates a later discrete time period
+### Session vs Order
+### A single session is a single period of tracked continuity. In essence, discrete differences in sessions within the same user shows a discontinuity. Where the user has spent x amount of time (x could be seconds, minutes, hours or days since the last session)
+
+```
+
+```{r}
+results <- read.csv("D:\Semester 2 2026\MXB348 - Work Integrated Learning/data/customer_journey-4.csv)
+head(results)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
