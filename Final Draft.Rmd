@@ -61,6 +61,7 @@ nrow(journeys)
 ```
 ```{r}
 transitions <- journeys %>%
+  filter(session_id>0)%>% # Filters to only RETURN SESSIONS.
   group_by(user_id, session_id) %>% # Each unique combination
   arrange(order, .by_group = TRUE) %>% # Ensures ordinal categorization
   mutate(
@@ -173,6 +174,18 @@ View(P)
 ### Instagram has the highest observed immediate transition probability 
 ### conversion at approximately 25.64% with YouTube being the lowest at 25.09%.
 ```
+```{r}
+### Question 1 = 
+###             Step 1 = Transition probability matrix with ONLY return_id>0.
+###             Step 2 = Initial state vector with counts of initial channel/state where filter order=0 and return_id>0.
+###             Step 3 = At this point we have an initial vector and transition probability matrix.
+###             Step 4 = Vector transpose multiplied by matrix to the power of n. Where n is number of steps.
+###             Step 5 = We should get a matrix where the probabilities should converge on 0's everywhere and converge on 1 in the conversion/conversion entry. 
+initial_vector = 
+### Question 2 = The expected number of transitions required to reach the absorbing state
+
+```
+
 
 ### Session Identification variable (user_id) (Ordinal Discrete Integers)
 ### A greater number simulates a later discrete time period
