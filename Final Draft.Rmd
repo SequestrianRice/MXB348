@@ -91,31 +91,32 @@ View(transitions %>%
 ```
 
 ```{r}
-transition_counts <- transitions %>%
+MRn_counts <- transitions %>%
   count(
     channel,
     next_state,
     name = "n"
-  );
-View(transition_counts)
+  ) %>%
+ filter(next_state != "No Conversion")
+View(MRn_counts)
 ### This is the point in which we can begin to really interpret our data. Since
 ### now we have sample count data associated with each possible unique tracked 
 ### transition for every person and each of their sessions. 
 ```
 
 ```{r}
-transition_probs <- transition_counts %>%
+MRn_probs <- MRn_counts %>%
   group_by(channel) %>%
   mutate(
     probability = n / sum(n)
   ) %>%
   ungroup()
-View(transition_probs)
+View(MRn_probs)
 ### Converts the count data into probabilities
 ```
 
 ```{r}
-transition_probs %>%
+MRn_probs %>%
   filter(next_state == "Conversion") %>%
   arrange(desc(probability))
 ### A tibble that shows the probability given the sample data of each channel
@@ -130,11 +131,12 @@ states <- sort(
     )
   )
 );
-P <- matrix(
+states <- states[states != "No Conversion"]
+MRn <- matrix(
   0,
   nrow = length(states),
   ncol = length(states),
-  dimnames = list(states, states) # a R^(10x10) matrix with 
+  dimnames = list(states, states) # a R^(9x9) matrix with 
 ) # [channel no conversion conversion].
 ### This is all to create an empty/unfilled transition probability matrix where 
 ### after this section we will fill it with data that satisfy the necessary 
@@ -142,30 +144,27 @@ P <- matrix(
 ```
 
 ```{r}
-for (i in seq_len(nrow(transition_probs))) {
+for (i in seq_len(nrow(MRn_probs))) {
 
-  from <- transition_probs$channel[i]
-  to   <- transition_probs$next_state[i]
+  from <- MRn_probs$channel[i]
+  to   <- MRn_probs$next_state[i]
 
-  P[from, to] <-
-    transition_probs$probability[i]
+  MRn[from, to] <-
+    MRn_probs$probability[i]
 };
-P["Conversion", ] <- 0
-P["Conversion", "Conversion"] <- 1
-
-P["No Conversion", ] <- 0
-P["No Conversion", "No Conversion"] <- 1
+MRn["Conversion", ] <- 0
+MRn["Conversion", "Conversion"] <- 1
 ```
 
 ```{r}
 customer_mc <- new(
   "markovchain",
   states = states,
-  transitionMatrix = P,
+  transitionMatrix = MRn,
   name = "Logickube Customer Journey"
 );
 customer_mc;
-View(P)
+View(MRn)
 ### We have now constructed our first-order Markov Chain transition probability
 ### matrix. We have also got a probability of 1 in both the "No Conversion" and
 ### "Conversion" diagonal to represent them as absorbing states that symbolize
@@ -174,30 +173,46 @@ View(P)
 ### Instagram has the highest observed immediate transition probability 
 ### conversion at approximately 25.64% with YouTube being the lowest at 25.09%.
 ```
+
+
 ```{r}
-### Question 1 = 
-###             Step 1 = Transition probability matrix with ONLY return_id>0.
-###             Step 2 = Initial state vector with counts of initial channel/state where filter order=0 and return_id>0.
-###             Step 3 = At this point we have an initial vector and transition probability matrix.
-###             Step 4 = Vector transpose multiplied by matrix to the power of n. Where n is number of steps.
-###             Step 5 = We should get a matrix where the probabilities should converge on 0's everywhere and converge on 1 in the conversion/conversion entry. 
-initial_vector = 
-### Question 2 = The expected number of transitions required to reach the absorbing state
+states_1by9 <- c(
+  "Direct",
+  "Email Marketing",
+  "Facebook",
+  "Google Display",
+  "Google Search",
+  "Instagram",
+  "Organic",
+  "Youtube",
+  "Conversion"
+)
 
+I <- journeys %>%
+  filter(order == 0) %>%
+  count(channel, name = "n") %>%
+  complete(channel = states_1by9, fill = list(n = 0))
+
+view(I)
 ```
 
 
-### Session Identification variable (user_id) (Ordinal Discrete Integers)
-### A greater number simulates a later discrete time period
-### Session vs Order
-### A single session is a single period of tracked continuity. In essence, discrete differences in sessions within the same user shows a discontinuity. Where the user has spent x amount of time (x could be seconds, minutes, hours or days since the last session)
+```{r}
+### 4.1 Predictive Modelling
+###
+### Question 1 
+###
+### Probability of a customer being converted on a return visit.
+###
+### Step 1 = Transition probability matrix with ONLY session_id>0. (MC^n).
+### 
+### Step 2 = Initial state vector (potentially transposed) with counts of initial channel/state where filter order=0 and session_id>0 (I). In essence, go to "transition_counts" and sum/count_if all the channels and conversions. This should now be, IMC^n = R^1x9 R^9x9
+###
+### Step 3 = Vector multiplied by matrix to the power of n. Where n is number of steps.
+###
+### Step 4 = We should get a matrix where the probabilities should converge on 0's everywhere and converge on 1 in the conversion/conversion entry. 
+###
+### Question 2 
+### The expected number of transitions required to reach the absorbing state
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
