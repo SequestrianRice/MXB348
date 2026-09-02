@@ -57,12 +57,15 @@ journeys <- journeys %>%
     session_id,
     order
   )
+```
 
-set.seed(348)
+
+```{r}
+set.seed(157)
 
 journeys <- journeys %>%
   group_by(user_id) %>%
-  filter(runif(1) < 0.8) %>%
+  filter(runif(1) < 0.6) %>%
   ungroup()
 ### Concatenation and rearrangement of both files to have a complete 
 ### understanding of a users session
@@ -230,12 +233,17 @@ for (n in 0:10) { # Starting at n = 0 is a design choice to be able to see
 ### Constructing the non-conversion variable as a function of "1 - Conversion"
 ### at each step of n.
 non_conversion <- results %>%
-  filter(channel == "Conversion") %>%
-  mutate(
+  group_by(n) %>%
+  summarise(
     channel = "Non Conversion",
-    probability = 1 - probability
+    probability = 1 - sum(probability)
   )
-
+### non_conversion <- results %>%
+  #filter(channel == "Conversion") %>%
+  #mutate(
+    #channel = "Non Conversion",
+    #probability = 1 - probability
+  #)
 results <- bind_rows(results, non_conversion)
 ### finally combining the non-conversion calculations to the results data points
 ```
