@@ -4,6 +4,13 @@ author: "Sebastian"
 date: "2026-09-02"
 output: html_document
 ---
+```{r}
+### Conditions
+### All data from regardless if it's a return visit or not are used 
+### Only data that lead to a final conversion will be used
+### I = 1x9
+### MRn = 9x9
+```
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
