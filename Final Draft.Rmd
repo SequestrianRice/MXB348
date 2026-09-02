@@ -16,6 +16,7 @@ results <- read.csv("D:/MXB348 - Work Integrated Learning/data/results-3.csv")
 install.packages(c(
   "tidyverse",
   "markovchain"
+  "expm"
 ))
 ### Download relevant files
 ```
@@ -23,6 +24,7 @@ install.packages(c(
 ```{r}
 library(tidyverse)
 library(markovchain)
+library(expm)
 ### Load the relevant libraries
 ```
 
@@ -201,10 +203,15 @@ I <- journeys %>%
   complete(channel = states_1by9, fill = list(n = 0)) %>%
   mutate(n = n / sum(n))
 
-I <-
 view(I)
 ```
 
+```{r}
+n <- 10
+result <- as.numeric(I$n %*% (MRn %^% n))
+names(result) <- colnames(MRn)
+view(result)
+```
 
 ```{r}
 ### 4.1 Predictive Modelling
