@@ -17,11 +17,12 @@ library(tidyverse)
   library(lubridate)
   library(stringr)
 library(markovchain)
+library(data.table)
 ```
 
 ```{r data_load, include=F}
-journey <- read_csv("data/customer_journey-4.csv")
-results <- read_csv("data/results-3.csv")
+journey <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/customer_journey-4.csv")
+results <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/results-3.csv")
 
 ## FEATURE ENGINEERING
   # path with same order id into 1 column.
@@ -66,8 +67,9 @@ Do attribution results at Level 2 (no group) add up to results at Level 1 (group
 
 ## [CLEANING / FEATURE ENGINEERING]
 
-```{r path journey column}
-journey2 <- journey %>%
+```{r feature engineering}
+# CHANNEL NAME SYSTEM
+journeyA <- journey %>%
   mutate(channel = fct_recode(channel,
                              "GD" = "Google Display",
                              "GS" = "Google Search",
@@ -76,23 +78,42 @@ journey2 <- journey %>%
                              "GY" = "Youtube",
                              "MI" = "Instagram",
                              "MF" = "Facebook",
-                             "FE" = "Email Marketing")) %>% # Codename: 1st Letter = Group, 2nd Letter = Channel
+                             "FE" = "Email Marketing")) # Codename: 1st Letter = Group, 2nd Letter = Channel
 
-dt_wide = dcast(data = journey2, formula = user_id ~ user_id, value.var = "channel")
-dt_wide = dt_wide[, path:=do.call(paste,c(.SD, sep=' > ')), .SDcols=-1]
-dt_wide = dt_wide[, path:=word(path, 1, sep = " > NA")]
+# CHANNEL JOURNEY (WHOLE)
+journeyA <- setDT(journeyA)
+journeyA_wide = dcast(data = journeyA, formula = user_id + session_id ~ order, value.var = "channel")
+journeyA_wide = journeyA_wide[, path:=do.call(paste,c(.SD, sep=" > ")), .SDcols=-c(1,2)]
+journeyA_wide = journeyA_wide[, path:=word(path, 1, sep = " > NA")]
+journeyA_wide <- journeyA_wide %>% select(-c("0":"25"))
 
-conversion = dt[, .(conversion=sum(conversion), conversion_value=sum(conversion_value)), by=cookie]
+# FIRST + LAST CHANNEL
+journeyA_wide <- journeyA_wide %>% 
+  mutate("first_touchpoint" = str_extract(path, "^.."),
+         "last_touchpoint" = str_extract(path, "..$"))
 
-setkey(conversion, cookie)
-setkey(dt_wide, cookie)
+# TOTAL JOURNEY TIME
+journeyA <- journeyA %>%
+  filter(order == 0) %>%
+  select(-c("order", "channel"))
 
-dt_wide = merge(dt_wide, conversion)
+merge1 <- inner_join(journeyA_wide, journeyA, by = c("user_id", "session_id"))
+attribution_v1 <- inner_join(merge1, results, by = c("user_id", "session_id"))
 
-head(dt_wide[, .(path, conversion, conversion_value)]) %>%
-           kable() %>%
-           kable_styling(bootstrap_options = "striped",
-                         full_width = F, 
-                         position="center")
+# TOTAL TOUCHPOINT COUNT
+n_touchpoint <- attribution_v1$path %>%
+  str_count(">") + 1
+
+# Make a new column in our dataset
+attribution_v1$touchpoint_count <- n_touchpoint
+
+# TOTAL CONVERSIONS (from first to current customer journey)
+attribution_v1 <- attribution_v1 %>%
+  group_by(user_id) %>%
+  mutate(customer_conversion_count = cumsum(conversion == 1),
+         customer_journey_count = session_id + 1,
+         customer_conversion_rate = round(customer_conversion_count/customer_journey_count, 3),
+         returning = n() > 1) %>%
+  ungroup()
 
 ```
