@@ -1,0 +1,98 @@
+---
+title: "Question_3"
+author: "Retief Padget"
+date: "2026-09-03"
+output: pdf_document
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include=F}
+library(ChannelAttribution)
+library(tidyverse)
+  # More Specifically
+  library(dplyr)
+  library(lubridate)
+  library(stringr)
+library(markovchain)
+```
+
+```{r data_load, include=F}
+journey <- read_csv("data/customer_journey-4.csv")
+results <- read_csv("data/results-3.csv")
+
+## FEATURE ENGINEERING
+  # path with same order id into 1 column.
+  # can look at frequency of each path.
+  # group into journey length too.
+  # duration time + grouped too.
+  # compare with collapsed group.
+  # looking at total conversion rate and then provide weighting to EACH CHANNEL.
+
+# direction
+  # no grouping
+  # grouping - time, channels, collapsing.
+```
+
+## 4.3 [OUTLINE] Business Success Attribution
+
+Business Success = Conversion. Attribution method determines how much credit each contributing factor deserves.
+
+### 4.3.1 Contribution of Each Channel
+
+Calculate OVERALL conversion rate & Attribute the conversions to the 8 channels.
+
+Example: calculate 8 weights (1 for each channel) that sum up to 100%.
+
+### 4.3.2 Journey Length Impact
+
+Does the customer journey length have an impact on attribution results?
+
+Ideas: Short vs long. Duration of time.
+
+Do the attribution results differ for collapsed journeys?
+
+### 4.3.3 Levels of Granularity
+
+8 channels to 3 groups: Free (organic, direct, email); Google (search, display, youtube); Meta (facebook, instagram)
+
+Are attribution results CONSISTENT between the two levels of granularity?
+
+Do attribution results at Level 2 (no group) add up to results at Level 1 (groups)? If not, is there any method?
+
+## [LITERATURE REVIEW]
+
+## [CLEANING / FEATURE ENGINEERING]
+
+```{r path journey column}
+journey2 <- journey %>%
+  mutate(channel = fct_recode(channel,
+                             "GD" = "Google Display",
+                             "GS" = "Google Search",
+                             "FO" = "Organic",
+                             "FD" = "Direct",
+                             "GY" = "Youtube",
+                             "MI" = "Instagram",
+                             "MF" = "Facebook",
+                             "FE" = "Email Marketing")) %>% # Codename: 1st Letter = Group, 2nd Letter = Channel
+
+dt_wide = dcast(data = journey2, formula = user_id ~ user_id, value.var = "channel")
+dt_wide = dt_wide[, path:=do.call(paste,c(.SD, sep=' > ')), .SDcols=-1]
+dt_wide = dt_wide[, path:=word(path, 1, sep = " > NA")]
+
+conversion = dt[, .(conversion=sum(conversion), conversion_value=sum(conversion_value)), by=cookie]
+
+setkey(conversion, cookie)
+setkey(dt_wide, cookie)
+
+dt_wide = merge(dt_wide, conversion)
+
+head(dt_wide[, .(path, conversion, conversion_value)]) %>%
+           kable() %>%
+           kable_styling(bootstrap_options = "striped",
+                         full_width = F, 
+                         position="center")
+
+```
