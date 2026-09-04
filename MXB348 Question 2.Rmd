@@ -13,25 +13,217 @@ output: html_document
 ```
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+setwd("D:/MXB348 - Work Integrated Learning")
+customer_journey <- read.csv("D:/MXB348 - Work Integrated Learning/data/customer_journey-4.csv"); 
+results <- read.csv("D:/MXB348 - Work Integrated Learning/data/results-3.csv")
+### Setting the working directory and opening the files
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r}
+install.packages(c(
+  "tidyverse",
+  "markovchain"
+  "expm"
+))
+### Download relevant files
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+library(tidyverse)
+library(markovchain)
+library(expm)
+### Load the relevant libraries
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+head(customer_journey)
+head(results)
+str(customer_journey)
+str(results)
+summary(customer_journey)
+summary(results)
+# Displays a brief summary
+```
+
+```{r}
+journeys <- customer_journey %>%
+  left_join(
+    results,
+    by = c("user_id", "session_id")
+  );
+journeys <- journeys %>%
+  arrange(
+    user_id,
+    session_id,
+    order
+  )
+
+set.seed(348)
+
+journeys <- journeys %>%
+  group_by(user_id) %>%
+  filter(runif(1) < 0.8) %>%
+  ungroup()
+### Concatenation and rearrangement of both files to have a complete 
+### understanding of a users session
+### Note, the use of the sequential operator over another pipeline 
+```
+
+```{r}
+#  Opens viewing portal
+nrow(customer_journey)
+nrow(journeys)
+# Debugging point, ensures equivalent dimensions
+```
+
+```{r}
+transitions <- journeys %>%
+  group_by(user_id, session_id) %>% # Each unique combination
+  arrange(order, .by_group = TRUE) %>% # Ensures ordinal categorization
+  mutate(
+    next_state = lead(channel) # Looks one row ahead and puts that value into a
+  ) %>% # new column called "next state"
+  ungroup();# Un-magnifying
+transitions <- transitions %>%
+  mutate(
+    next_state = case_when(
+      !is.na(next_state) ~ next_state, # "na" are now converted to
+      conversion == 1 ~ "Conversion",
+      conversion == 0 ~ "No Conversion" 
+    ) # Conversion's now act as an absorbing state in a Markov Chain.
+  ) # To symbolize the end of an individual tracked session.
+View(transitions %>%
+    select(
+      user_id,
+      session_id,
+      order,
+      channel,
+      next_state,
+      conversion
+    )
+)
+### Formalizing the Markov-chain transformation mechanism (Markov Property), 
+### by identifying what channel each customer moves to next.
+```
+
+```{r}
+MRn_counts <- transitions %>%
+  count(
+    channel,
+    next_state,
+    name = "n"
+  ) %>%
+ filter(next_state != "No Conversion")
+View(MRn_counts)
+### This is the point in which we can begin to really interpret our data. Since
+### now we have sample count data associated with each possible unique tracked 
+### transition for every person and each of their sessions. 
+```
+
+```{r}
+MRn_probs <- MRn_counts %>%
+  group_by(channel) %>%
+  mutate(
+    probability = n / sum(n)
+  ) %>%
+  ungroup()
+View(MRn_probs)
+### Converts the count data into probabilities
+```
+
+```{r}
+MRn_probs %>%
+  filter(next_state == "Conversion") %>%
+  arrange(desc(probability))
+### A tibble that shows the probability given the sample data of each channel
+### turning into a conversion.
+```
+
+```{r}
+states <- sort(
+  unique(
+    c(
+      transitions$channel,
+      transitions$next_state
+    )
+  )
+);
+states <- states[states != "No Conversion"]
+MRn <- matrix(
+  0,
+  nrow = length(states),
+  ncol = length(states),
+  dimnames = list(states, states) # a R^(9x9) matrix with 
+) # [channel no conversion conversion].
+### This is all to create an empty/unfilled transition probability matrix where 
+### after this section we will fill it with data that satisfy the necessary 
+### properties (Square matrix with probabilities that sum to 1).
+```
+
+```{r}
+for (i in seq_len(nrow(MRn_probs))) {
+
+  from <- MRn_probs$channel[i]
+  to   <- MRn_probs$next_state[i]
+
+  MRn[from, to] <-
+    MRn_probs$probability[i]
+};
+MRn["Conversion", ] <- 0
+MRn["Conversion", "Conversion"] <- 1
+```
+
+```{r}
+customer_mc <- new(
+  "markovchain",
+  states = states,
+  transitionMatrix = MRn,
+  name = "Logickube Customer Journey"
+);
+customer_mc;
+View(MRn)
+### We have now constructed our first-order Markov Chain transition probability
+### matrix. We have also got a probability of 1 in both the "No Conversion" and
+### "Conversion" diagonal to represent them as absorbing states that symbolize
+### how at the end of every session, we end up with either a successful or 
+### unsuccessful conversion.
+### Instagram has the highest observed immediate transition probability 
+### conversion at approximately 25.64% with YouTube being the lowest at 25.09%.
+```
+
+```{r}
+states_1by9 <- c(
+  "Direct",
+  "Email Marketing",
+  "Facebook",
+  "Google Display",
+  "Google Search",
+  "Instagram",
+  "Organic",
+  "Youtube",
+  "Conversion"
+)
+
+I <- journeys %>%
+  filter(order == 0) %>%
+  count(channel, name = "n") %>%
+  complete(channel = states_1by9, fill = list(n = 0)) %>%
+  mutate(n = n / sum(n))
+
+view(I)
+```
+
+```{r}
+n <- 5
+result <- as.numeric(I$n %*% (MRn %^% n))
+names(result) <- colnames(MRn)
+view(result)
+```
+
+```{r}
+### Question 2
+###
+### R has a built in matrix solver, we are looking to solve the expected value
+### /expected number of steps until we reach an absorbing state/conversion.
+```
+
