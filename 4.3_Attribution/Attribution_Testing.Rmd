@@ -18,6 +18,7 @@ library(tidyverse)
   library(stringr)
 library(markovchain)
 library(data.table)
+library(reshape2)
 ```
 
 ```{r data_load, include=F}
@@ -82,7 +83,8 @@ journeyA <- journey %>%
 
 # CHANNEL JOURNEY (WHOLE)
 journeyA <- setDT(journeyA)
-journeyA_wide = dcast(data = journeyA, formula = user_id + session_id ~ order, value.var = "channel")
+journeyA_wide = data.table::dcast(data = journeyA, formula = user_id + session_id ~ order, value.var = "channel")
+  # Clarify that dcast is from "data.table". Assumes "reshape2" if both installed.
 journeyA_wide = journeyA_wide[, path:=do.call(paste,c(.SD, sep=" > ")), .SDcols=-c(1,2)]
 journeyA_wide = journeyA_wide[, path:=word(path, 1, sep = " > NA")]
 journeyA_wide <- journeyA_wide %>% select(-c("0":"25"))
@@ -116,4 +118,85 @@ attribution_v1 <- attribution_v1 %>%
          returning = n() > 1) %>%
   ungroup()
 
+# NO CONVERSION (For Markov Model)
+attribution_v2 <- attribution_v1 %>%
+  mutate(null_conversion = 1 - conversion)
+
+```
+
+```{r attribution model}
+# calculating the models
+mod1 <- markov_model(attribution_v2,
+                     var_path = 'path',
+                     var_conv = 'conversion',
+                     var_null = 'null_conversion',
+                     out_more = TRUE)
+# extracting the results of attribution
+df_res1 <- mod1$result
+# extracting a transition matrix
+df_trans1 <- mod1$transition_matrix
+# naming
+df_trans1 <- df_trans1 %>%
+  mutate(channel_from = fct_recode(channel_from,
+                                   "GD" = "1",
+                                   "GS" = "2",
+                                   "FO" = "3",
+                                   "FD" = "4",
+                                   "GY" = "5",
+                                   "MI" = "6",
+                                   "MF" = "7",
+                                   "FE" = "8"),
+         channel_to = fct_recode(channel_to,
+                                 "GD" = "1",
+                                 "GS" = "2",
+                                 "FO" = "3",
+                                 "FD" = "4",
+                                 "GY" = "5",
+                                 "MI" = "6",
+                                 "MF" = "7",
+                                 "FE" = "8"))
+df_trans1 <- dcast(df_trans1, channel_from ~ channel_to, value.var = 'transition_probability')
+
+### plotting the Markov graph ###
+df_trans <- mod1$transition_matrix
+# adding dummies in order to plot the graph
+df_dummy <- data.frame(channel_from = c('(start)', '(conversion)', '(null)'),
+                       channel_to = c('(start)', '(conversion)', '(null)'),
+                       transition_probability = c(0, 1, 1))
+df_trans <- rbind(df_trans, df_dummy)
+# name editing
+df_trans <- df_trans %>%
+  mutate(channel_from = fct_recode(channel_from,
+                                   "GD" = "1",
+                                   "GS" = "2",
+                                   "FO" = "3",
+                                   "FD" = "4",
+                                   "GY" = "5",
+                                   "MI" = "6",
+                                   "MF" = "7",
+                                   "FE" = "8"),
+         channel_to = fct_recode(channel_to,
+                                 "GD" = "1",
+                                 "GS" = "2",
+                                 "FO" = "3",
+                                 "FD" = "4",
+                                 "GY" = "5",
+                                 "MI" = "6",
+                                 "MF" = "7",
+                                 "FE" = "8"))
+# ordering channels
+df_trans$channel_from <- factor(df_trans$channel_from,
+                                levels = c('(start)', '(conversion)', '(null)', 'GD', 'GS', 'FO', 'FD', 'GY', 'MI', 'MF', 'FE'))
+df_trans$channel_to <- factor(df_trans$channel_to,
+                                levels = c('(start)', '(conversion)', '(null)', 'GD', 'GS', 'FO', 'FD', 'GY', 'MI', 'MF', 'FE'))
+df_trans <- dcast(df_trans, channel_from ~ channel_to, value.var = 'transition_probability')
+
+# creating the markovchain object
+trans_matrix <- matrix(data = as.matrix(df_trans[, -1]),
+nrow = nrow(df_trans[, -1]), ncol = ncol(df_trans[, -1]),
+dimnames = list(c(as.character(df_trans[, 1])), c(colnames(df_trans[, -1]))))
+trans_matrix[is.na(trans_matrix)] <- 0
+trans_matrix1 <- new("markovchain", transitionMatrix = trans_matrix)
+# plotting the graph
+plot(trans_matrix1, edge.arrow.size = 0.35)
 ```
