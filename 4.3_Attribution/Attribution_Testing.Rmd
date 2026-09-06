@@ -23,8 +23,8 @@ library(igraph)
 ```
 
 ```{r data_load, include=F}
-journey <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/customer_journey-4.csv")
-results <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/results-3.csv")
+journey <- read_csv("data/customer_journey-4.csv")
+results <- read_csv("data/results-3.csv")
 
 ## FEATURE ENGINEERING
   # path with same order id into 1 column.
