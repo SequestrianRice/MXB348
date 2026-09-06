@@ -19,6 +19,7 @@ library(tidyverse)
 library(markovchain)
 library(data.table)
 library(reshape2)
+library(igraph)
 ```
 
 ```{r data_load, include=F}
@@ -198,5 +199,10 @@ dimnames = list(c(as.character(df_trans[, 1])), c(colnames(df_trans[, -1]))))
 trans_matrix[is.na(trans_matrix)] <- 0
 trans_matrix1 <- new("markovchain", transitionMatrix = trans_matrix)
 # plotting the graph
-plot(trans_matrix1, edge.arrow.size = 0.35)
+plot(trans_matrix1, edge.arrow.size = 0.35, margin = -0.3)
+
+g <- as(trans_matrix1, "igraph") 
+lo <- layout_with_fr(g) # Fruchterman-Reingold layout
+lo_scaled <- lo * 1.5   # Increase distance by 50%
+plot(g, layout = lo_scaled, edge.arrow.size = 0.35)
 ```
