@@ -61,11 +61,11 @@ journeys <- journeys %>%
 
 
 ```{r}
-set.seed(157)
+set.seed(69420)
 
 journeys <- journeys %>%
   group_by(user_id) %>%
-  filter(runif(1) < 0.6) %>%
+  filter(runif(1) < 0.8) %>%
   ungroup()
 ### Concatenation and rearrangement of both files to have a complete 
 ### understanding of a users session

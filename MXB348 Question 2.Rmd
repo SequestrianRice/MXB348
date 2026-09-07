@@ -22,7 +22,7 @@ results <- read.csv("D:/MXB348 - Work Integrated Learning/data/results-3.csv")
 ```{r}
 install.packages(c(
   "tidyverse",
-  "markovchain"
+  "markovchain",
   "expm"
 ))
 ### Download relevant files
@@ -57,7 +57,10 @@ journeys <- journeys %>%
     session_id,
     order
   )
+```
 
+
+```{r}
 set.seed(348)
 
 journeys <- journeys %>%
@@ -92,7 +95,7 @@ transitions <- transitions %>%
       conversion == 0 ~ "No Conversion" 
     ) # Conversion's now act as an absorbing state in a Markov Chain.
   ) # To symbolize the end of an individual tracked session.
-View(transitions %>%
+transitions %>%
     select(
       user_id,
       session_id,
@@ -101,7 +104,6 @@ View(transitions %>%
       next_state,
       conversion
     )
-)
 ### Formalizing the Markov-chain transformation mechanism (Markov Property), 
 ### by identifying what channel each customer moves to next.
 ```
@@ -114,7 +116,6 @@ MRn_counts <- transitions %>%
     name = "n"
   ) %>%
  filter(next_state != "No Conversion")
-View(MRn_counts)
 ### This is the point in which we can begin to really interpret our data. Since
 ### now we have sample count data associated with each possible unique tracked 
 ### transition for every person and each of their sessions. 
@@ -127,7 +128,6 @@ MRn_probs <- MRn_counts %>%
     probability = n / sum(n)
   ) %>%
   ungroup()
-View(MRn_probs)
 ### Converts the count data into probabilities
 ```
 
@@ -225,5 +225,6 @@ view(result)
 ###
 ### R has a built in matrix solver, we are looking to solve the expected value
 ### /expected number of steps until we reach an absorbing state/conversion.
+
 ```
 
