@@ -50,25 +50,26 @@ colnames(all_models)[c(1, 4)] <- c('channel_name', 'attrib_model_conversions')
 # transition matrix heatmap for "real" data
 df_plot_trans <- mod2$transition_matrix
 
+  # Channel names - assume that it is in same order as h_mod2
 df_plot_trans <- df_plot_trans %>%
   mutate(channel_from = fct_recode(channel_from,
                                    "GD" = "1",
                                    "GS" = "2",
                                    "FO" = "3",
-                                   "FD" = "4",
-                                   "GY" = "5",
-                                   "MI" = "6",
-                                   "MF" = "7",
-                                   "FE" = "8"),
+                                   "MI" = "4",
+                                   "MF" = "5",
+                                   "FD" = "6",
+                                   "FE" = "7",
+                                   "GY" = "8"),
          channel_to = fct_recode(channel_to,
                                  "GD" = "1",
                                  "GS" = "2",
                                  "FO" = "3",
-                                 "FD" = "4",
-                                 "GY" = "5",
-                                 "MI" = "6",
-                                 "MF" = "7",
-                                 "FE" = "8"))
+                                 "MI" = "4",
+                                 "MF" = "5",
+                                 "FD" = "6",
+                                 "FE" = "7",
+                                 "GY" = "8"))
 
 cols <- c("#e7f0fa", "#c9e2f6", "#95cbee", "#0099dc", "#4ab04a", "#ffd73e", "#eec73a",
           "#e29421", "#e29421", "#f05336", "#ce472e")
