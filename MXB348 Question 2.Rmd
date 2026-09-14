@@ -400,11 +400,19 @@ lifecycle_summary <-
       n / sum(n)
   )
 
-lifecycle_summary
+View(lifecycle_summary)
+```
 
+
+```{r}
 # ==========================================================
 # VALIDATION
 # ==========================================================
+model2_predictions <- test_conversion_steps %>%
+  mutate(
+    predicted_steps =
+      expected_steps[channel]
+  )
 
 lifecycle_validation <-
   model2_predictions %>%
@@ -467,8 +475,9 @@ stage_validation_summary <-
     .groups = "drop"
   )
 
-stage_validation_summary
-
+View(stage_validation_summary)
+### This attempt at a successful life cycle model tries to produce,
+### E[T|Late] < E[T|Mid] < E[T|Early]
 # ----------------------------------------------------------
 # Formal test of differences
 # ----------------------------------------------------------
