@@ -78,121 +78,50 @@ nrow(customer_journey)
 nrow(journeys)
 # Debugging point, ensures equivalent dimensions
 ```
+```{r}
+### Question 2
+###
+### R has a built in matrix solver, we are looking to solve the expected value
+### /expected number of steps until we reach an absorbing state/conversion.
+###
+```
+
 
 ```{r}
-transitions <- journeys %>%
-  group_by(user_id, session_id) %>% # Each unique combination
-  arrange(order, .by_group = TRUE) %>% # Ensures ordinal categorization
-  mutate(
-    next_state = lead(channel) # Looks one row ahead and puts that value into a
-  ) %>% # new column called "next state"
-  ungroup();# Un-magnifying
-transitions <- transitions %>%
-  mutate(
-    next_state = case_when(
-      !is.na(next_state) ~ next_state, # "na" are now converted to
-      conversion == 1 ~ "Conversion",
-      conversion == 0 ~ "No Conversion" 
-    ) # Conversion's now act as an absorbing state in a Markov Chain.
-  ) # To symbolize the end of an individual tracked session.
-transitions %>%
-    select(
-      user_id,
-      session_id,
-      order,
-      channel,
-      next_state,
-      conversion
-    )
-### Formalizing the Markov-chain transformation mechanism (Markov Property), 
-### by identifying what channel each customer moves to next.
+### Creation of the Absorbing Finite Markov Chain
+### Priors
+### I = 1x9
+### MRn = 9x9
+### We are also sticking to first order Markov Chains for a single primary 
+### purpose. 
+### That being the possibility of over fitting our data. The primary goal of 
+### statistics is to use finite data to create a model that can infer valuable
+### information from the population. By using a higher order Markov chain that
+### uses information before the single previous transition. There is a risk that
+### we begin creating a model that is not only more computationally demanding.
+### But is also primed to be able to predict our specific data set a lot better.
+### This is despite the proprietary use of training data. Because although we
+### can randomize the training data to test our model. At the end of the day we
+### want a model that does the job of predicting real events not just 
+### events constructed by the training data. This requires a model that powerfully
+### predicts our currently available information, but also allows for a flexible 
+### enough model to allow for exceptions.
 ```
 
 ```{r}
-MRn_counts <- transitions %>%
-  count(
-    channel,
-    next_state,
-    name = "n"
-  ) %>%
- filter(next_state != "No Conversion")
-### This is the point in which we can begin to really interpret our data. Since
-### now we have sample count data associated with each possible unique tracked 
-### transition for every person and each of their sessions. 
+
+### Journey Filtration
+train_conversion = journeys %>%
+  filter(conversion == 1)
+### From here, we will begin estimating P(Xt+1 = j|Xt = i, eventual conversion)
+### Whilst Model 1 addresses conversion propensity 
+### Model 2 addresses the expected remaining journey length conditional upon
+### conversion occurring.
 ```
 
 ```{r}
-MRn_probs <- MRn_counts %>%
-  group_by(channel) %>%
-  mutate(
-    probability = n / sum(n)
-  ) %>%
-  ungroup()
-### Converts the count data into probabilities
-```
-
-```{r}
-MRn_probs %>%
-  filter(next_state == "Conversion") %>%
-  arrange(desc(probability))
-### A tibble that shows the probability given the sample data of each channel
-### turning into a conversion.
-```
-
-```{r}
-states <- sort(
-  unique(
-    c(
-      transitions$channel,
-      transitions$next_state
-    )
-  )
-);
-states <- states[states != "No Conversion"]
-MRn <- matrix(
-  0,
-  nrow = length(states),
-  ncol = length(states),
-  dimnames = list(states, states) # a R^(9x9) matrix with 
-) # [channel no conversion conversion].
-### This is all to create an empty/unfilled transition probability matrix where 
-### after this section we will fill it with data that satisfy the necessary 
-### properties (Square matrix with probabilities that sum to 1).
-```
-
-```{r}
-for (i in seq_len(nrow(MRn_probs))) {
-
-  from <- MRn_probs$channel[i]
-  to   <- MRn_probs$next_state[i]
-
-  MRn[from, to] <-
-    MRn_probs$probability[i]
-};
-MRn["Conversion", ] <- 0
-MRn["Conversion", "Conversion"] <- 1
-```
-
-```{r}
-customer_mc <- new(
-  "markovchain",
-  states = states,
-  transitionMatrix = MRn,
-  name = "Logickube Customer Journey"
-);
-customer_mc;
-View(MRn)
-### We have now constructed our first-order Markov Chain transition probability
-### matrix. We have also got a probability of 1 in both the "No Conversion" and
-### "Conversion" diagonal to represent them as absorbing states that symbolize
-### how at the end of every session, we end up with either a successful or 
-### unsuccessful conversion.
-### Instagram has the highest observed immediate transition probability 
-### conversion at approximately 25.64% with YouTube being the lowest at 25.09%.
-```
-
-```{r}
-states_1by9 <- c(
+### State Space Concatenation
+channel_states <- c(
   "Direct",
   "Email Marketing",
   "Facebook",
@@ -200,31 +129,386 @@ states_1by9 <- c(
   "Google Search",
   "Instagram",
   "Organic",
-  "Youtube",
-  "Conversion"
+  "Youtube"
 )
 
-I <- journeys %>%
-  filter(order == 0) %>%
-  count(channel, name = "n") %>%
-  complete(channel = states_1by9, fill = list(n = 0)) %>%
-  mutate(n = n / sum(n))
-
-view(I)
+states <- c(
+  channel_states,
+  "Conversion"
+)
 ```
 
 ```{r}
-n <- 5
-result <- as.numeric(I$n %*% (MRn %^% n))
-names(result) <- colnames(MRn)
-view(result)
+### Transition Element Calculations
+train_transitions <- train_conversion %>%
+  group_by(
+    user_id,
+    session_id
+  ) %>%
+  arrange(
+    order,
+    .by_group = TRUE
+  ) %>%
+  mutate(
+    next_state = lead(channel)
+  ) %>%
+  mutate(
+    next_state = if_else(
+      is.na(next_state),
+      "Conversion",
+      next_state
+    )
+  ) %>%
+  ungroup()
 ```
 
 ```{r}
-### Question 2
+transition_counts <- train_transitions %>%
+  count(
+    channel,
+    next_state,
+    name = "n"
+  )
+transition_probs <- transition_counts %>%
+  group_by(channel) %>%
+  mutate(
+    probability = n / sum(n)
+  ) %>%
+  ungroup()
+```
+
+```{r}
+P <- matrix(
+  0,
+  nrow = length(states),
+  ncol = length(states),
+  dimnames = list(
+    states,
+    states
+  )
+)
+
+for (i in seq_len(nrow(transition_probs))) {
+
+  from <- transition_probs$channel[i]
+  to   <- transition_probs$next_state[i]
+
+  P[from, to] <-
+    transition_probs$probability[i]
+}
+```
+
+```{r}
+### Explicitly Creating The Absorbing States
+P["Conversion", ] <- 0
+
+P[
+  "Conversion",
+  "Conversion"
+] <- 1
+### Meaning, once the conversion is reached, it remains converted.
+```
+
+```{r}
+round(
+  rowSums(P),
+  10
+)
+```
+```{r}
+### Final Markov Object
+customer_mc <- new(
+  "markovchain",
+  states = states,
+  transitionMatrix = P,
+  name = "Conditional Customer Conversion Journey"
+)
+
+customer_mc
+```
+```{r}
+############################################################
+# 4.1 - Expected Number of Steps
+############################################################
 ###
-### R has a built in matrix solver, we are looking to solve the expected value
-### /expected number of steps until we reach an absorbing state/conversion.
+### N = (I-Q)^-1
+### 
+### N = Fundamental matrix. Its entries give the expected number of visits
+### to transient state j, starting from transient state i, before absorption.
+### I = Identity matrix
+### Q = Transient to transient transition matrix. Its the part of the full 
+### transition matrix P containing probabilities of moving between transient 
+### states. 
+Q <- P[
+  channel_states,
+  channel_states
+]
 
+I8 <- diag(
+  nrow(Q)
+)
+
+N <- solve(
+  I8 - Q
+)
 ```
+
+```{r}
+### Calculating The Expected Number of Steps
+expected_steps <- as.numeric(
+  N %*% rep(
+    1,
+    nrow(Q)
+  )
+)
+
+names(expected_steps) <-
+  rownames(Q)
+
+expected_steps
+```
+
+```{r}
+### Converts Results into Useful Display
+expected_steps_table <-
+  tibble(
+    channel =
+      names(expected_steps),
+
+    expected_steps_to_conversion =
+      expected_steps
+  ) %>%
+  arrange(
+    expected_steps_to_conversion
+  )
+
+expected_steps_table
+```
+
+```{r}
+############################################################
+# 4.2 - Customer Lifecycle Stages
+############################################################
+###
+### Determine life cycle cutoffs using TRAINING information
+### only to avoid information leakage.
+stage_cutoffs <- quantile(
+  expected_steps,
+  probs = c(
+    1 / 3,
+    2 / 3
+  ),
+  na.rm = TRUE
+)
+
+stage_cutoffs
+### Deriving cutoffs from the training data. Where we divide the distribution
+### of predicted remaining steps into thirds.
+```
+
+
+```{r}
+### Assigning Channels to Each Lifestyle Stage
+channel_lifecycle <-
+  expected_steps_table %>%
+  mutate(
+    lifecycle_stage =
+      case_when(
+
+        expected_steps_to_conversion <=
+          stage_cutoffs[1] ~
+          "Late",
+
+        expected_steps_to_conversion <=
+          stage_cutoffs[2] ~
+          "Mid",
+
+        TRUE ~
+          "Early"
+      )
+  )
+
+View(channel_lifecycle)
+### The point here being, we are making numerically driven categorizations. 
+### Here, we can see that higher expected steps to conversion channels are 
+### categorized as "early" stage life cycles. The reason for this is because 
+### channels with a higher expected value have more steps remaining before 
+### conversion and therefore a customer in that channel is presumabely in an 
+### earlier stage of their journey.
+```
+
+
+```{r}
+### 
+current_customer_state <-
+  journeys %>%
+  group_by(user_id) %>%
+  arrange(
+    desc(session_id),
+    desc(order),
+    .by_group = TRUE
+  ) %>%
+  slice(1) %>%
+  ungroup()
+### Creates the "current_customer_state" object which is the user's most 
+### recent journey record.
+
+current_customer_state <-
+  current_customer_state %>%
+  mutate(
+    predicted_steps =
+      expected_steps[channel]
+  )
+### Furthermore, we're now adding the expected number of remaining steps for 
+### each user's current channel. 
+
+current_customer_state <-
+  current_customer_state %>%
+  mutate(
+    lifecycle_stage =
+      case_when(
+
+        conversion == 1 ~
+          "Converted",
+
+        predicted_steps <=
+          stage_cutoffs[1] ~
+          "Late",
+
+        predicted_steps <=
+          stage_cutoffs[2] ~
+          "Mid",
+
+        TRUE ~
+          "Early"
+      )
+  )
+### From here, we just labelled each user as one of the four life cycle stages
+### based on conversion and predicted steps
+View(current_customer_state)
+```
+
+
+```{r}
+lifecycle_summary <-
+  current_customer_state %>%
+  count(
+    lifecycle_stage
+  ) %>%
+  mutate(
+    proportion =
+      n / sum(n)
+  )
+
+lifecycle_summary
+
+# ==========================================================
+# VALIDATION
+# ==========================================================
+
+lifecycle_validation <-
+  model2_predictions %>%
+  mutate(
+    lifecycle_stage =
+      case_when(
+
+        predicted_steps <=
+          stage_cutoffs[1] ~
+          "Late",
+
+        predicted_steps <=
+          stage_cutoffs[2] ~
+          "Mid",
+
+        TRUE ~
+          "Early"
+      )
+  ) %>%
+  mutate(
+    lifecycle_stage = factor(
+      lifecycle_stage,
+      levels = c(
+        "Early",
+        "Mid",
+        "Late"
+      ),
+      ordered = TRUE
+    )
+  )
+
+# ----------------------------------------------------------
+# Observed remaining journey length by lifecycle stage
+# ----------------------------------------------------------
+
+stage_validation_summary <-
+  lifecycle_validation %>%
+  group_by(
+    lifecycle_stage
+  ) %>%
+  summarise(
+
+    n = n(),
+
+    mean_actual_steps =
+      mean(
+        actual_steps_remaining
+      ),
+
+    median_actual_steps =
+      median(
+        actual_steps_remaining
+      ),
+
+    sd_actual_steps =
+      sd(
+        actual_steps_remaining
+      ),
+
+    .groups = "drop"
+  )
+
+stage_validation_summary
+
+# ----------------------------------------------------------
+# Formal test of differences
+# ----------------------------------------------------------
+
+stage_anova <- aov(
+  actual_steps_remaining ~
+    lifecycle_stage,
+  data =
+    lifecycle_validation
+)
+
+summary(stage_anova)
+
+# ----------------------------------------------------------
+# Visual validation
+# ----------------------------------------------------------
+
+ggplot(
+  lifecycle_validation,
+  aes(
+    x = lifecycle_stage,
+    y = actual_steps_remaining
+  )
+) +
+  geom_boxplot() +
+  labs(
+    title =
+      "Actual Remaining Journey Length by Lifecycle Stage",
+    x =
+      "Predicted Customer Lifecycle Stage",
+    y =
+      "Actual Steps Remaining Until Conversion"
+  )
+```
+
+
+
+
+
+
+
+
 

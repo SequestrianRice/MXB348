@@ -275,5 +275,6 @@ Probabilistic_Transitions_Plot <- ggplot(results, aes(
   theme_minimal()
 
 Probabilistic_Transitions_Plot
+### Channel Changing TPM (Return only)
 ```
 
