@@ -333,7 +333,7 @@ View(channel_lifecycle)
 ### Here, we can see that higher expected steps to conversion channels are 
 ### categorized as "early" stage life cycles. The reason for this is because 
 ### channels with a higher expected value have more steps remaining before 
-### conversion and therefore a customer in that channel is presumabely in an 
+### conversion and therefore a customer in that channel is presumably in an 
 ### earlier stage of their journey.
 ```
 
@@ -401,49 +401,14 @@ lifecycle_summary <-
   )
 
 View(lifecycle_summary)
+### I believe this is the point where we need to really understand what the 
+### summary table represents and how we want to further interpret this 
+### information.
 ```
 
 
 ```{r}
-# ==========================================================
-# VALIDATION
-# ==========================================================
-model2_predictions <- test_conversion_steps %>%
-  mutate(
-    predicted_steps =
-      expected_steps[channel]
-  )
-
-lifecycle_validation <-
-  model2_predictions %>%
-  mutate(
-    lifecycle_stage =
-      case_when(
-
-        predicted_steps <=
-          stage_cutoffs[1] ~
-          "Late",
-
-        predicted_steps <=
-          stage_cutoffs[2] ~
-          "Mid",
-
-        TRUE ~
-          "Early"
-      )
-  ) %>%
-  mutate(
-    lifecycle_stage = factor(
-      lifecycle_stage,
-      levels = c(
-        "Early",
-        "Mid",
-        "Late"
-      ),
-      ordered = TRUE
-    )
-  )
-
+###
 # ----------------------------------------------------------
 # Observed remaining journey length by lifecycle stage
 # ----------------------------------------------------------
