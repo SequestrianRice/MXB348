@@ -339,7 +339,10 @@ View(channel_lifecycle)
 
 
 ```{r}
-### 
+### Creates the "current_customer_state" object which is the user's most
+### recent journey record.
+### Furthermore, we're now adding the expected number of remaining steps 
+### for each user's current channel. 
 current_customer_state <-
   journeys %>%
   group_by(user_id) %>%
@@ -349,22 +352,10 @@ current_customer_state <-
     .by_group = TRUE
   ) %>%
   slice(1) %>%
-  ungroup()
-### Creates the "current_customer_state" object which is the user's most 
-### recent journey record.
-
-current_customer_state <-
-  current_customer_state %>%
+  ungroup() %>%
   mutate(
     predicted_steps =
-      expected_steps[channel]
-  )
-### Furthermore, we're now adding the expected number of remaining steps for 
-### each user's current channel. 
-
-current_customer_state <-
-  current_customer_state %>%
-  mutate(
+      expected_steps[channel],
     lifecycle_stage =
       case_when(
 
@@ -381,8 +372,21 @@ current_customer_state <-
 
         TRUE ~
           "Early"
+      ),
+    
+    lifecycle_stage =
+      factor(
+        lifecycle_stage,
+        levels = c(
+          "Converted",
+          "Late",
+          "Mid",
+          "Early"
+        )
       )
   )
+View(current_customer_state)
+    
 ### From here, we just labelled each user as one of the four life cycle stages
 ### based on conversion and predicted steps
 View(current_customer_state)
@@ -393,7 +397,8 @@ View(current_customer_state)
 lifecycle_summary <-
   current_customer_state %>%
   count(
-    lifecycle_stage
+    lifecycle_stage,
+    .drop = FALSE
   ) %>%
   mutate(
     proportion =
@@ -412,7 +417,109 @@ View(lifecycle_summary)
 # ----------------------------------------------------------
 # Observed remaining journey length by lifecycle stage
 # ----------------------------------------------------------
+lifecycle_validation <-
+  journeys %>%
+  arrange(
+    user_id,
+    session_id,
+    order
+  ) %>%
+  group_by(user_id) %>%
+  mutate(
 
+    journey_position =
+      row_number(),
+
+    next_conversion_position =
+      vapply(
+        journey_position,
+        function(i) {
+
+          future_conversions <-
+            journey_position[
+              journey_position >= i &
+                conversion == 1
+            ]
+
+          if (length(future_conversions) == 0) {
+
+            NA_integer_
+
+          } else {
+
+            min(future_conversions)
+
+          }
+        },
+        integer(1)
+      ),
+
+    actual_steps_remaining =
+      next_conversion_position -
+      journey_position
+  ) %>%
+  ungroup() %>%
+
+  # Only observations for which a subsequent conversion is
+  # actually observed can be used to validate remaining
+  # journey length.
+  filter(
+    !is.na(actual_steps_remaining)
+  ) %>%
+
+  mutate(
+
+    # Assign predicted remaining steps using the expected
+    # steps estimated from the training transition model.
+    predicted_steps =
+      expected_steps[channel],
+
+    # Apply exactly the same training-derived lifecycle
+    # cutoffs used above.
+    lifecycle_stage =
+      case_when(
+
+        predicted_steps <=
+          stage_cutoffs[1] ~
+          "Late",
+
+        predicted_steps <=
+          stage_cutoffs[2] ~
+          "Mid",
+
+        TRUE ~
+          "Early"
+      ),
+
+    lifecycle_stage =
+      factor(
+        lifecycle_stage,
+        levels = c(
+          "Late",
+          "Mid",
+          "Early"
+        )
+      )
+  ) %>%
+
+  # Remove observations where a channel could not be mapped
+  # to an expected-step estimate.
+  filter(
+    !is.na(predicted_steps),
+    !is.na(lifecycle_stage)
+  ) %>%
+
+  # Temporary variables used to calculate actual remaining
+  # steps are no longer required.
+  select(
+    -journey_position,
+    -next_conversion_position
+  )
+
+View(lifecycle_validation)
+```
+
+```{r}
 stage_validation_summary <-
   lifecycle_validation %>%
   group_by(
@@ -420,28 +527,35 @@ stage_validation_summary <-
   ) %>%
   summarise(
 
-    n = n(),
+    n =
+      n(),
 
     mean_actual_steps =
       mean(
-        actual_steps_remaining
+        actual_steps_remaining,
+        na.rm = TRUE
       ),
 
     median_actual_steps =
       median(
-        actual_steps_remaining
+        actual_steps_remaining,
+        na.rm = TRUE
       ),
 
     sd_actual_steps =
       sd(
-        actual_steps_remaining
+        actual_steps_remaining,
+        na.rm = TRUE
       ),
 
     .groups = "drop"
   )
 
 View(stage_validation_summary)
-### This attempt at a successful life cycle model tries to produce,
+```
+
+
+```{r}
 ### E[T|Late] < E[T|Mid] < E[T|Early]
 # ----------------------------------------------------------
 # Formal test of differences
@@ -459,7 +573,10 @@ summary(stage_anova)
 # ----------------------------------------------------------
 # Visual validation
 # ----------------------------------------------------------
+```
 
+
+```{r}
 ggplot(
   lifecycle_validation,
   aes(
@@ -471,11 +588,18 @@ ggplot(
   labs(
     title =
       "Actual Remaining Journey Length by Lifecycle Stage",
+
     x =
       "Predicted Customer Lifecycle Stage",
+
     y =
       "Actual Steps Remaining Until Conversion"
-  )
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
 ```
 
 
