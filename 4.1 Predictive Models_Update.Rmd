@@ -1,0 +1,1485 @@
+---
+title: "4.1 GAM Predictive Models"
+author: "Colby Cooper"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r document_setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load packages and data and setup base variables
+
+```{r data_setup, warnings=FALSE, message=FALSE}
+# Packages
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+library(mgcv)
+
+# Load data
+journeys <- read.csv("customer_journey-4.csv")
+results <- read.csv("results-3.csv")
+
+# Channels to keep order consistent
+channels <- c("Direct",
+              "Email Marketing",
+              "Facebook",
+              "Google Display",
+              "Google Search",
+              "Instagram",
+              "Organic",
+              "Youtube")
+
+# States for predictive models 1 and 2
+states_1 <- c(channels,
+              "Conversion",
+              "Exit")
+
+states_2 <- c(channels,
+              "Conversion")
+
+# Number of basis functions for the GAM smooth
+gam_k <- 6
+
+# Maximum step to which we will generate predictions
+max_prediction_step <- 30
+
+# Set seed for reproducibility
+set.seed(123)
+```
+
+Combine datasets into one table
+
+```{r combine_datasets}
+journeys_full <- journeys %>%
+  left_join(results %>%
+              select(user_id, session_id, conversion),
+            by = c("user_id", "session_id")) %>%
+  arrange(user_id, session_id, order)
+```
+
+Split data into training and test groups
+
+```{r training_test_split}
+# Get all unique customers
+all_users <- unique(journeys_full$user_id)
+
+# Randomly select 80% of customers for training
+training_users <- sample(all_users,
+                  size = floor(0.80 * length(all_users)))
+
+# Remaining 20% of customers for testing
+test_users <- setdiff(all_users, training_users)
+
+# Split journey data
+journeys_training <- journeys_full %>%
+  filter(user_id %in% training_users)
+
+journeys_test <- journeys_full %>%
+  filter(user_id %in% test_users)
+```
+
+Create function to count transitions and use for both models
+
+```{r transitions}
+# Function to extract transitions data
+make_transitions <- function(data,
+                             return_only = FALSE,
+                             converting_only = FALSE) {
+  
+  x <- data
+  
+  # Model 1: only return visits
+  if (return_only) {
+    x <- x %>%
+      filter(session_id > 0)
+  }
+  
+  # Model 2: only converting journeys
+  if (converting_only) {
+    x <- x %>%
+      filter(conversion == 1)
+  }
+  
+  x %>%
+    arrange(user_id, session_id, order) %>%
+    group_by(user_id, session_id) %>%
+    mutate(
+      
+      current_state = channel,
+      
+      next_state = lead(channel),
+      
+      # Final touchpoint of each session:
+      # if conversion = 1 -> Conversion
+      # otherwise -> Exit
+      next_state = case_when(
+        !is.na(next_state) ~ next_state,
+        conversion == 1 ~ "Conversion",
+        TRUE ~ "Exit"),
+      
+      # Journey stage
+      step = order) %>%
+    ungroup() %>%
+    select(user_id,
+           session_id,
+           step,
+           current_state,
+           next_state,
+           conversion)
+}
+
+# Model 1 transitions
+transitions_1 <- make_transitions(journeys_training,
+                                   return_only = TRUE)
+
+# Model 2 transitions
+transitions_2 <- make_transitions(journeys_training,
+                                   converting_only = TRUE)
+```
+
+Aggregate transitions to make calculations faster
+
+```{r aggregate}
+# Model 1
+transition_counts_1 <- transitions_1 %>%
+  count(step,
+        current_state,
+        next_state,
+        name = "Count")
+
+# Model 2
+transition_counts_2 <- transitions_2 %>%
+  count(step,
+        current_state,
+        next_state,
+        name = "Count")
+```
+
+Fit GAMs to every possible transition
+
+```{r GAMs}
+# Function to fit GAMs to transitions
+fit_transition_gams <- function(data,
+                                states,
+                                channels,
+                                k = k) {
+  
+  curves <- list()
+  
+  for (from_state in channels) {
+    
+    curves[[from_state]] <- list()
+    
+    # Total number of transitions originating from this state at each step
+    
+    totals <- data %>%
+      filter(.data$current_state == from_state) %>%
+      group_by(step) %>%
+      summarise(
+        total = sum(Count),
+        .groups = "drop")
+    
+    # Fit one model for every possible destination
+
+    for (to_state in states) {
+      
+      successes <- data %>%
+        filter(.data$current_state == from_state,
+               .data$next_state == to_state) %>%
+        group_by(step) %>%
+        summarise(success = sum(Count),
+                  .groups = "drop")
+      
+      # Add zero successes for steps where this transition did not occur
+      d <- totals %>%
+        left_join(successes,
+                  by = "step") %>%
+        mutate(success = replace_na(success, 0),
+               failure = total - success)
+      
+      # Special cases
+
+      # Transition never occurs
+      if (sum(d$success) == 0) {
+        
+        curves[[from_state]][[to_state]] <- list(
+          type = "constant",
+          value = 0)
+        
+        # Transition always occurs
+      } else if (sum(d$success) == sum(d$total)) {
+        
+        curves[[from_state]][[to_state]] <- list(
+          type = "constant",
+          value = 1)
+        
+        # Normal GAM
+
+      } else {
+        
+        fit <- gam(
+          cbind(success, failure) ~
+            s(step, k = k),
+          family = binomial,
+          method = "REML",
+          data = d)
+        
+        curves[[from_state]][[to_state]] <- list(
+          type = "gam",
+          fit = fit)
+      }
+    }
+  }
+  
+  list(curves = curves,
+       states = states,
+       channels = channels,
+       k = k)
+}
+
+# Produce GAMs for model 1
+model_1 <- fit_transition_gams(
+  data = transition_counts_1,
+  states = states_1,
+  channels = channels,
+  k = gam_k)
+
+# Produce GAMs for model 2
+model_2 <- fit_transition_gams(
+  data = transition_counts_2,
+  states = states_2,
+  channels = channels,
+  k = gam_k)
+```
+
+Function to use transition curve to predict transition probability
+
+```{r predict_transition}
+predict_transition_curve <- function(curve,
+                                     new_step) {
+  
+  # Constant model
+  if (curve$type == "constant") {
+    
+    return(rep(curve$value,
+               length(new_step)))
+  }
+  
+  # GAM
+  p <- predict(curve$fit,
+               newdata = data.frame(step = new_step),
+               type = "response")
+  
+  # Protect against tiny numerical values outside [0,1]
+  pmin(pmax(p, 0),1)
+}
+```
+
+Extract GAM curves
+
+```{r extract_curves}
+# Function to extract curves
+extract_curves <- function(model,
+                           prediction_steps) {
+  
+  output <- list()
+  
+  counter <- 1
+  
+  for (from_state in model$channels) {
+    
+    for (to_state in model$states) {
+      
+      curve <- model$curves[[from_state]][[to_state]]
+      
+      probabilities <- predict_transition_curve(
+        curve,
+        prediction_steps)
+      
+      output[[counter]] <- data.frame(
+        from_state = from_state,
+        to_state = to_state,
+        step = prediction_steps,
+        probability = probabilities)
+      
+      counter <- counter + 1
+    }
+  }
+  
+  bind_rows(output)
+}
+
+# Set steps for prediction
+prediction_steps <- 0:max_prediction_step
+
+# Model 1 GAM curves
+curve_predictions_1 <- extract_curves(
+  model_1,
+  prediction_steps)
+
+# Model 2 GAM curves
+curve_predictions_2 <- extract_curves(
+  model_2,
+  prediction_steps)
+```
+
+Example GAMs for each model (not transition probability)
+
+```{r GAM_plots}
+# Model 1 plot
+example_channel_1 <- "Instagram"
+
+example_plot_1 <- curve_predictions_1 %>%
+  filter(from_state == example_channel_1) %>%
+  ggplot(aes(x = step,
+             y = probability,
+             colour = to_state)) +
+  geom_line(linewidth = 1) +
+  geom_vline(xintercept = max(transitions_1$step),
+             linetype = "dashed") +
+  labs(title = paste("Model 1 Smoothed Transition Probabilities From",
+                     example_channel_1),
+       subtitle = "Dashed Line Indicates the Maximum Observed Journey step",
+       x = "Current Step",
+       y = "GAM Predicted Transition Probability",
+       colour = "Next state") +
+  theme_minimal()
+
+print(example_plot_1)
+
+# Model 2 plot
+example_channel_2 <- "Instagram"
+
+example_plot_2 <- curve_predictions_2 %>%
+  filter(from_state == example_channel_2) %>%
+  ggplot(aes(x = step,
+             y = probability,
+             colour = to_state)) +
+  geom_line(linewidth = 1) +
+  geom_vline(xintercept = max(transitions_2$step),
+             linetype = "dashed") +
+  labs(title = paste("Model 2 Smoothed Transition Probabilities From",
+                     example_channel_2),
+       subtitle = "Dashed Line Indicates the Maximum Observed Journey step",
+       x = "Current Step",
+       y = "GAM Predicted Transition Probability",
+       colour = "Next State") +
+  theme_minimal()
+
+print(example_plot_2)
+```
+
+Function to create transition probability matrix
+```{r make_matrix}
+make_matrix <- function(model,
+                        step) {
+  
+  states <- model$states
+  
+  M <- matrix(0,
+              nrow = length(states),
+              ncol = length(states),
+              dimnames = list(states,
+                              states))
+  
+  # Non-absorbing states
+
+  for (from_state in model$channels) {
+    
+    probabilities <- sapply(
+      states,
+      function(to_state) {
+        
+        curve <- model$curves[[from_state]][[to_state]]
+        
+        predict_transition_curve(
+          curve,
+          new_step = step
+        )[1]
+      }
+    )
+    
+    probabilities <- as.numeric(probabilities)
+    
+    # Normalise row
+
+    probability_sum <- sum(probabilities)
+    
+    if (probability_sum > 0) {
+      
+      probabilities <-
+        probabilities / probability_sum
+      
+    } else {
+      
+      stop(paste("All transition probabilities are zero for",
+                 from_state,
+                 "at step",
+                 step))
+    }
+    
+    M[from_state, ] <- probabilities
+  }
+  
+  # Absorbing states
+
+  absorbing_states <- setdiff(states,
+                              model$channels)
+  
+  for (state in absorbing_states) {
+    
+    M[state, ] <- 0
+    M[state, state] <- 1
+  }
+  
+  
+  M
+}
+```
+
+Example plots of transition probabilities (normalised GAM values)
+
+```{r transition_probabilities_plots}
+# Extract normalised curves for plotting
+extract_normalised_curves <- function(model, prediction_steps) {
+  
+  output <- list()
+  counter <- 1
+  
+  for (step in prediction_steps) {
+    
+    M <- make_matrix(model, step)
+    
+    for (from_state in model$channels) {
+      
+      for (to_state in model$states) {
+        
+        output[[counter]] <- data.frame(
+          from_state = from_state,
+          to_state = to_state,
+          step = step,
+          probability = M[from_state, to_state]
+        )
+        
+        counter <- counter + 1
+      }
+    }
+  }
+  
+  bind_rows(output)
+}
+
+# Model 1 transition probabilities
+max_observed_step_1 <- max(transitions_1$step, na.rm = TRUE)
+
+normalised_curves_1 <- extract_normalised_curves(
+  model_1,
+  prediction_steps)
+
+curves_1 <- normalised_curves_1 %>%
+  filter(from_state == example_channel_1)
+
+ggplot(curves_1,
+       aes(x = step, y = probability, colour = to_state)) +
+       geom_line(linewidth = 1) +
+       geom_vline(xintercept = max_observed_step_1,
+             linetype = "dashed") +
+  labs(title = paste("Model 1 Transition Probabilities From",
+                     example_channel_1),
+       subtitle = "Dashed Line Indicates the Maximum Observed Journey step",
+       x = "Current Step",
+       y = "Transition Probability",
+       colour = "Next State") +
+  theme_minimal()
+
+# Model 2 transition probabilities
+max_observed_step_2 <- max(transitions_2$step, na.rm = TRUE)
+
+normalised_curves_2 <- extract_normalised_curves(
+  model_2,
+  prediction_steps)
+
+curves_2 <- normalised_curves_2 %>%
+  filter(from_state == example_channel_2)
+
+ggplot(curves_2,
+       aes(x = step, y = probability, colour = to_state)) +
+       geom_line(linewidth = 1) +
+       geom_vline(xintercept = max_observed_step_2,
+             linetype = "dashed") +
+  labs(title = paste("Model 2 Transition Probabilities From",
+                     example_channel_2),
+       subtitle = "Dashed Line Indicates the Maximum Observed Journey step",
+       x = "Current Step",
+       y = "Transition Probability",
+       colour = "Next State") +
+  theme_minimal()
+```
+
+Build the necessary transition matrices based on data and steps
+
+```{r matrices}
+# Function to build necessary transition matrices
+build_matrices <- function(model,
+                           max_step) {
+  
+  matrices <- lapply(
+    0:max_step,
+    function(n) {
+      make_matrix(
+        model,
+        step = n)
+    }
+  )
+  
+  names(matrices) <- as.character(0:max_step)
+  
+  matrices
+}
+
+# Build matrices for model 1
+matrices_1 <- build_matrices(model_1,
+                             max_prediction_step)
+
+# Build matrices for model 2
+matrices_2 <- build_matrices(model_2,
+                             max_prediction_step)
+```
+
+# Model 1 - Conversion Probability On Return Visit
+
+Set up initial state probability vector
+
+```{r initials_1}
+# Initial state counts and probabilities
+return_start <- transitions_1 %>%
+  filter(step == 0) %>%
+  count(current_state,
+        name = "count") %>%
+  mutate(probability = count / sum(count))
+
+# Set initial states vector
+p0_1 <- setNames(rep(0,length(states_1)),
+                 states_1)
+
+p0_1[return_start$current_state] <- return_start$probability
+```
+
+Propagate initial states through the Markov chain
+
+```{r propagate_1}
+p <- p0_1
+
+distribution_1 <- list()
+
+for (step in 0:max_prediction_step) {
+  
+  distribution_1[[step + 1]] <- data.frame(step = step,
+                                           state = names(p),
+                                           probability = as.numeric(p))
+  
+  # Stop if this is the final requested step
+  if (step == max_prediction_step) {
+    break
+  }
+  
+  M <- matrices_1[[as.character(step)]]
+  
+  p <- as.numeric(p %*% M)
+  
+  names(p) <- states_1
+}
+
+distribution_1 <- bind_rows(distribution_1)
+```
+
+Calculate cumulative conversion probability
+
+```{r cumulative_conversion}
+conversion_probability_1 <- distribution_1 %>%
+  filter(state == "Conversion") %>%
+  select(step,
+         conversion_probability = probability)
+
+# View the first few cumulative conversion probabilities
+print(head(conversion_probability_1))
+```
+
+Plot the cumulative conversion probability of return journeys
+
+```{r cumulative_conversion_plot}
+conversion_plot_1 <- ggplot(conversion_probability_1,
+                            aes(x = step,
+                                y = conversion_probability))+ 
+  geom_line(linewidth = 1) +
+  geom_vline(xintercept = max(transitions_1$step),
+             linetype = "dashed") +
+  scale_y_continuous(limits = c(0, 1),
+                     labels = scales::percent) +
+  labs(title = "Model 1 Predicted Cumulative Probability of Conversion",
+       subtitle = "Return-Visit Journeys",
+       x = "Journey Step",
+       y = "Cumulative Probability of Conversion") +
+  theme_minimal()
+
+print(conversion_plot_1)
+```
+
+Calculate how conversion probability changes depending on starting channel
+
+```{r conversion_by_channel}
+# Function to calculate conversion probability by starting channel
+conversion_probability_from_state <- function(
+    model,
+    matrices,
+    start_state,
+    start_step = 0,
+    end_step = max_prediction_step) {
+  
+  p <- setNames(
+    rep(0,
+        length(model$states)),
+    model$states)
+  
+  p[start_state] <- 1
+  
+  for (step in start_step:end_step) {
+    
+    if (step == end_step) {
+      break
+    }
+    
+    M <- matrices[[as.character(step)]]
+    
+    p <- as.numeric(p %*% M)
+    
+    names(p) <- model$states
+  }
+  
+  p["Conversion"]
+}
+
+# Conversion rate by initial channel
+channel_conversion_1 <- tibble(
+  channel = channels,
+  conversion_probability = map_dbl(
+    channels,
+    ~ conversion_probability_from_state(
+      model_1,
+      matrices_1,
+      start_state = .x,
+      start_step = 0,
+      end_step = max_prediction_step)))
+
+print(channel_conversion_1)
+```
+
+# Model 2 - Expected Steps Until Conversion
+
+E[n | current channel, current step, eventual conversion]
+
+Function to calculate expected steps until conversion
+
+```{r remaining_steps_function}
+expected_steps_to_conversion <- function(
+    model,
+    matrices,
+    start_state,
+    start_step = 0,
+    end_step = max_prediction_step) {
+  
+  # Initial state
+
+  p <- setNames(rep(0,
+                    length(model$states)),
+                model$states)
+  
+  p[start_state] <- 1
+  
+  total_conversion_probability <- 0
+  
+  weighted_steps <- 0
+  
+  # Propagate forward
+
+  if (start_step >= end_step) {
+    return(NA_real_)
+  }
+  
+  for (step in start_step:end_step) {
+    
+    M <- matrices[[as.character(step)]]
+    
+    p_new <- as.numeric(p %*% M)
+    
+    names(p_new) <- model$states
+    
+    # Probability that conversion occurs for the first time on this transition. Since Conversion is absorbing, this is simply the increase in the probability of being in Conversion
+    
+    conversion_this_step <-
+      p_new["Conversion"] -
+      p["Conversion"]
+    
+    # Avoid tiny negative floating-point errors
+    conversion_this_step <-
+      max(conversion_this_step,
+          0)
+    
+    # Number of additional transitions required
+    additional_steps <-
+      step - start_step + 1
+    
+    weighted_steps <-
+      weighted_steps +
+      additional_steps *
+      conversion_this_step
+    
+    total_conversion_probability <-
+      total_conversion_probability +
+      conversion_this_step
+    
+    p <- p_new
+  }
+  
+  # Conditional expectation
+
+  if (total_conversion_probability == 0) {
+    return(NA_real_)
+  }
+  
+  weighted_steps /
+    total_conversion_probability
+}
+```
+
+Calculate expected steps until conversion
+
+```{r remaining_steps}
+expected_steps_all_stages <- expand_grid(
+  step = 0:(max_prediction_step - 1),
+  channel = channels) %>%
+  
+  mutate(
+    expected_steps = map2_dbl(
+      step,
+      channel,
+      ~ expected_steps_to_conversion(
+        model = model_2,
+        matrices = matrices_2,
+        start_state = .y,
+        start_step = .x,
+        end_step = max_prediction_step)))
+```
+
+Plot expected steps until conversion
+
+```{r expected_steps_plot}
+expected_steps_plot_2 <- ggplot(expected_steps_all_stages,
+                                aes(x = step,
+                                    y = expected_steps,
+                                    colour = channel)) +
+  geom_line(linewidth = 1) +
+  geom_vline(xintercept = max(transitions_2$step),
+             linetype = "dashed") +
+  labs(title = "Model 2 Expected Steps Until Conversion From Any State",
+       subtitle = "Dashed Line Indicates the Maximum Observed Journey step",
+       x = "Current Step",
+       y = "Expected Additional Steps Until Conversion",
+       colour = "Current Channel") +
+  theme_minimal()
+
+print(expected_steps_plot_2)
+```
+
+Heatmap of expected steps until conversion
+
+```{r heatmap}
+heatmap_2 <- expected_steps_all_stages %>%
+  ggplot(aes(x = step,
+             y = channel,
+             fill = expected_steps)) +
+  geom_tile() +
+  scale_x_continuous(breaks = seq(0,
+                                  max_prediction_step - 1,
+                                  by = 10)) +
+  labs(title = "Mpdel 2 Expected Steps Until Conversion From Any State",
+       x = "Current Step",
+       y = "Current Channel",
+       fill = "Expected\nAdditional Steps") +
+  theme_minimal()
+
+print(heatmap_2)
+```
+
+Expected steps until conversion from first touchpoint
+
+```{r steps_from_initial}
+initial_2 <- expected_steps_all_stages %>%
+  filter(step == 0) %>%
+  arrange(expected_steps)
+
+print(initial_2)
+```
+
+# Model Testing
+
+Test data transitions
+
+```{r}
+#  Model 1 test transitions
+transitions_1_test <- make_transitions(
+  journeys_test,
+  return_only = TRUE)
+
+# Model 2 test transitions
+transitions_2_test <- make_transitions(
+  journeys_test,
+  converting_only = TRUE)
+```
+
+Test model transition prediction accuracy
+
+```{r test_transition_predictions}
+get_test_transition_predictions <- function(
+    test_data,
+    model,
+    prediction_max_step) {
+
+  results <- vector("list", prediction_max_step + 1)
+
+  # Generate a transition matrix for every step
+  for (step in 0:prediction_max_step) {
+
+    results[[step + 1]] <- make_matrix(model, step)
+  }
+
+  # Combine test observations with their predicted probabilities
+  output <- test_data %>%
+    filter(current_state %in% model$channels,
+           next_state %in% model$states,
+           step >= 0,
+           step <= prediction_max_step) %>%
+    rowwise() %>%
+    mutate(predicted_probability =
+             results[[step + 1]][current_state, next_state]) %>%
+    ungroup()
+
+  output
+}
+```
+
+```{r test_predictions}
+test_predictions_1 <- get_test_transition_predictions(
+  transitions_1_test,
+  model_1,
+  max_prediction_step)
+
+test_predictions_2 <- get_test_transition_predictions(
+  transitions_2_test,
+  model_2,
+  max_prediction_step)
+```
+
+```{r log_loss}
+calculate_log_loss <- function(predictions) {
+
+  # Avoid log(0)
+  p <- pmax(
+    pmin(predictions$predicted_probability, 1 - 1e-15),
+    1e-15)
+
+  mean(-log(p))
+}
+
+log_loss_1 <- calculate_log_loss(test_predictions_1)
+
+log_loss_2 <- calculate_log_loss(test_predictions_2)
+
+log_loss_1
+
+log_loss_2
+```
+
+# Conversion Rate Predictive Power
+
+Test conversion prediction
+
+```{r conversion_prediction_test}
+# Calculate actual conversion rate for 4.1.1
+actual_conversion_rate_1 <- transitions_1_test %>%
+  group_by(step) %>%
+  summarise(actual_conversion =
+              mean(next_state == "Conversion"),
+            n = n(),
+    .groups = "drop")
+
+# Model conversion rate for 4.1.1
+test_initial_1 <- transitions_1_test %>%
+  filter(step == 0) %>%
+  count(current_state) %>%
+  mutate(probability = n / sum(n))
+
+# Propagate through mdoel 1 distributions
+p <- setNames(
+  rep(0, length(model_1$states)),
+  model_1$states
+)
+
+p[test_initial_1$current_state] <-
+  test_initial_1$probability
+
+predicted_conversion_1 <- data.frame(
+  step = 0,
+  predicted_conversion = p["Conversion"])
+
+for (step in 0:(max_prediction_step - 1)) {
+
+  M <- make_matrix(
+    model_1,
+    step)
+
+  p <- as.numeric(p %*% M)
+
+  names(p) <- model_1$states
+
+  predicted_conversion_1 <- bind_rows(
+    predicted_conversion_1,
+    data.frame(step = step + 1,
+               predicted_conversion =
+                 p["Conversion"]))
+}
+```
+
+Test cumulative conversion prediction
+
+```{r cumulative_conversion_test}
+# Model 1 session outcomes
+session_outcomes_1 <- transitions_1_test %>%
+  group_by(user_id, session_id) %>%
+  summarise(converted = any(next_state == "Conversion"),
+            conversion_step = ifelse(
+              converted,
+              min(step[next_state == "Conversion"]) + 1,
+              NA_real_),
+            .groups = "drop")
+
+# Actual cumulative conversion rate
+actual_cumulative_1 <- tibble(step = 0:max_prediction_step) %>%
+  rowwise() %>%
+  mutate(actual_conversion = mean(
+    session_outcomes_1$converted &
+    session_outcomes_1$conversion_step <= step)) %>%
+  ungroup()
+
+# Combine with model predictions
+validation_1 <- predicted_conversion_1 %>%
+  left_join(actual_cumulative_1,
+            by = "step") %>%
+  mutate(error =
+           predicted_conversion -
+           actual_conversion,
+         absolute_error =
+           abs(error),
+         squared_error =
+           error^2)
+
+# Validation metrics data range
+max_test_step <- max(transitions_1_test$step,
+                     na.rm = TRUE) + 1
+
+# Validation metrics dataset
+validation_metrics_1 <- validation_1 %>%
+  filter(step <= max_test_step)
+
+# Calculate validation metrics
+mae_1 <- mean(abs(validation_metrics_1$predicted_conversion -
+                    validation_metrics_1$actual_conversion),
+              na.rm = TRUE)
+
+rmse_1 <- sqrt(mean(
+    (validation_metrics_1$predicted_conversion -
+       validation_metrics_1$actual_conversion)^2,
+    na.rm = TRUE))
+
+mae_1
+
+rmse_1
+```
+
+Plot comparison between actual and predicted conversion
+
+```{r accuracy_plot}
+# Plot
+ggplot(validation_metrics_1,
+       aes(x = step)) +
+  geom_line(aes(y = predicted_conversion,colour = "Predicted"),
+            linewidth = 1) +
+  geom_point(aes(y = actual_conversion,
+                 colour = "Observed")) +
+  labs(title = "Model 1 Validation",
+    subtitle = "Predicted vs Observed Cumulative Conversion Probability",
+    x = "Current Step",
+    y = "Cumulative Conversion Probability",
+    colour = NULL) +
+  theme_minimal()
+```
+
+# Expected Steps Predictive Power
+
+Calculate the actual remaining steps until conversion from test data
+
+```{r actual_remaining_steps}
+# Find the actual conversion step for each converting test journey
+conversion_steps_2 <- transitions_2_test %>%
+  group_by(user_id, session_id) %>%
+  summarise(conversion_step = min(step[next_state == "Conversion"]) + 1,
+            .groups = "drop")
+
+# Add the actual number of remaining steps to every observation in the test journeys
+test_actual_2 <- transitions_2_test %>%
+  left_join(conversion_steps_2,
+            by = c("user_id", "session_id")) %>%
+  filter(current_state %in% model_2$channels) %>%
+  mutate(actual_remaining_steps =
+           conversion_step - step)
+```
+
+Make test data predicted steps and true steps dataset
+
+```{r test_step_predictions}
+test_predictions_2 <- test_actual_2 %>%
+  rowwise() %>%
+  mutate(predicted_remaining_steps =
+           expected_steps_to_conversion(
+             model = model_2,
+             matrices = matrices_2,
+             start_state = current_state,
+             start_step = step,
+             end_step = max_prediction_step)) %>%
+  ungroup()
+```
+
+Calculate prediction error
+
+```{r prediction_error}
+test_predictions_2 <- test_predictions_2 %>%
+  mutate(error =
+           predicted_remaining_steps -
+           actual_remaining_steps,
+
+    absolute_error =
+      abs(error),
+
+    squared_error =
+      error^2)
+```
+
+Calculate mae and rmse
+
+```{r validation_metrics}
+mae_2 <- mean(test_predictions_2$absolute_error,
+              na.rm = TRUE)
+
+mae_2
+
+rmse_2 <- sqrt(mean(test_predictions_2$squared_error,
+                    na.rm = TRUE))
+
+rmse_2
+```
+
+Check for prediction bias
+
+```{r bias_check}
+mean_error_2 <- mean(test_predictions_2$error,
+                     na.rm = TRUE)
+
+mean_error_2
+```
+
+Plot actual vs predicted remaining steps
+
+```{r model_2_validation_plot}
+ggplot(test_predictions_2,
+       aes(x = actual_remaining_steps,
+           y = predicted_remaining_steps)) +
+
+  geom_point(alpha = 0.15) +
+
+  geom_abline(slope = 1,
+              intercept = 0,
+              linetype = "dashed") +
+
+  labs(
+    title = "Model 2 Validation",
+    subtitle = "Predicted vs Observed Remaining Steps to Conversion",
+    x = "Actual Remaining Steps",
+    y = "Predicted Remaining Steps") +
+
+  theme_minimal()
+```
+
+Check predictions by channel
+
+```{r validation_by_channel}
+channel_validation_2 <- test_predictions_2 %>%
+  group_by(current_state) %>%
+  summarise(n = n(),
+
+    mean_actual =
+      mean(actual_remaining_steps),
+
+    mean_predicted =
+      mean(predicted_remaining_steps),
+
+    MAE =
+      mean(absolute_error),
+
+    RMSE =
+      sqrt(mean(squared_error)),
+
+    mean_error =
+      mean(error),
+
+    .groups = "drop") %>%
+  arrange(MAE)
+
+channel_validation_2
+```
+
+Check predictions by step
+
+```{r validation_by_step}
+step_validation_2 <- test_predictions_2 %>%
+  group_by(step) %>%
+  summarise(n = n(),
+
+    actual_mean =
+      mean(actual_remaining_steps),
+
+    predicted_mean =
+      mean(predicted_remaining_steps),
+
+    MAE =
+      mean(absolute_error),
+
+    RMSE =
+      sqrt(mean(squared_error)),
+
+    mean_error =
+      mean(error),
+
+    .groups = "drop")
+
+step_validation_2
+```
+
+Check how well predictions are retained
+
+```{r mae_vs_step_plot}
+ggplot(step_validation_2,
+       aes(x = step,
+           y = MAE)) +
+
+  geom_line() +
+
+  geom_point() +
+
+  labs(
+    title = "Model 2 Prediction Error by Journey Step",
+    x = "Current Journey Step",
+    y = "Mean Absolute Error (steps)") +
+
+  theme_minimal()
+```
+
+Plot of actual vs predicted mean steps
+
+```{r mean_steps_plot}
+step_means_2 <- test_predictions_2 %>%
+  group_by(step) %>%
+  summarise(actual =
+              mean(actual_remaining_steps),
+
+    predicted =
+      mean(predicted_remaining_steps),
+
+    .groups = "drop") %>%
+  tidyr::pivot_longer(cols = c(actual, predicted),
+                      names_to = "type",
+                      values_to = "remaining_steps")
+
+ggplot(step_means_2,
+       aes(x = step,
+           y = remaining_steps,
+           colour = type)) +
+
+  geom_line(linewidth = 1) +
+
+  geom_point() +
+
+  labs(
+    title = "Model 2 Validation",
+    subtitle = "Predicted vs Observed Mean Remaining Steps",
+    x = "Current Journey Step",
+    y = "Remaining Steps to Conversion",
+    colour = NULL) +
+
+  theme_minimal()
+```
+
+Determine the usefullness of the remaining step predictions.
+
+```{r predictons_by_channel}
+test_predictions_2 %>%
+  group_by(current_state) %>%
+  summarise(n = n(),
+            mean_predicted = mean(predicted_remaining_steps,
+                                  na.rm = TRUE),
+            sd_predicted = sd(predicted_remaining_steps,
+                              na.rm = TRUE),
+            min_predicted = min(predicted_remaining_steps,
+                                na.rm = TRUE),
+            max_predicted = max(predicted_remaining_steps,
+                                na.rm = TRUE),
+            .groups = "drop")
+```
+
+```{r predictions_by_step}
+test_predictions_2 %>%
+  group_by(step) %>%
+  summarise(n = n(),
+            mean_predicted = mean(predicted_remaining_steps,
+                                  na.rm = TRUE),
+            sd_predicted = sd(predicted_remaining_steps,
+                              na.rm = TRUE),
+            .groups = "drop")
+```
+
+# Simulation
+
+Model 1 simulation
+
+```{r simulation_functions}
+# Simulate one customer
+simulate_customer <- function(
+    matrices,
+    initial_state,
+    absorbing_states = c("Conversion", "Exit"),
+    max_steps) {
+  
+  current_state <- initial_state
+  
+  path <- data.frame(
+    step = 0,
+    state = current_state)
+  
+  for (step in 0:(max_steps - 1)) {
+    
+    # Stop if already in an absorbing state
+    if (current_state %in% absorbing_states) {
+      break
+    }
+    
+    # Get transition matrix for current step
+    M <- matrices[[as.character(step)]]
+    
+    if (is.null(M)) {
+      warning(
+        paste("No transition matrix available for step", step))
+      break
+    }
+    
+    # Get probabilities for current state
+    probabilities <- M[current_state, ]
+    
+    # Remove numerical problems
+    probabilities[is.na(probabilities)] <- 0
+    probabilities[probabilities < 0] <- 0
+    
+    # Normalise probabilities
+    probabilities <- probabilities / sum(probabilities)
+    
+    # Randomly select next state
+    next_state <- sample(
+      names(probabilities),
+      size = 1,
+      prob = probabilities)
+    
+    # Record transition
+    path <- rbind(
+      path,
+      data.frame(
+        step = step + 1,
+        state = next_state))
+    
+    current_state <- next_state
+    
+    # Stop if absorbing
+    if (current_state %in% absorbing_states) {
+      break
+    }
+  }
+  
+  path
+}
+
+# Simulate multiple customers
+simulate_customers <- function(
+    n_customers,
+    matrices,
+    initial_distribution,
+    absorbing_states,
+    max_steps) {
+  
+  all_paths <- vector("list", n_customers)
+  
+  for (customer in seq_len(n_customers)) {
+    
+    # Select starting state
+    initial_state <- sample(
+      initial_distribution$current_state,
+      size = 1,
+      prob = initial_distribution$probability)
+    
+    # Simulate journey
+    path <- simulate_customer(
+      matrices = matrices,
+      initial_state = initial_state,
+      absorbing_states = absorbing_states,
+      max_steps = max_steps)
+    
+    path$customer_id <- customer
+    
+    all_paths[[customer]] <- path
+  }
+  
+  bind_rows(all_paths)
+}
+```
+
+Initial distribution based on training data
+
+```{r simulation_1_initial}
+initial_distribution_1 <- transitions_1 %>%
+  filter(step == 0) %>%
+  count(current_state) %>%
+  mutate(probability = n / sum(n))
+
+initial_distribution_1
+```
+
+Model 1 simulation
+
+```{r simulation_1}
+simulation_1 <- simulate_customers(
+  n_customers = 10000,
+  matrices = matrices_1,
+  initial_distribution = initial_distribution_1,
+  absorbing_states = c("Conversion", "Exit"),
+  max_steps = max_prediction_step)
+```
+
+Compare simulated data to test data
+
+```{r simulated_vs_test_conversion}
+simulation_outcomes_1 <- simulation_1 %>%
+  group_by(customer_id) %>%
+  summarise(final_state = last(state),
+            journey_length = max(step),
+            .groups = "drop")
+
+# View some simulated journey summaries
+head(simulation_outcomes_1)
+
+# Conversion rate of simulated data
+mean(simulation_outcomes_1$final_state == "Conversion")
+
+# Conversion rate from test data
+test_conversion_rate <- transitions_1_test %>%
+  group_by(user_id, session_id) %>%
+  summarise(converted = any(next_state == "Conversion"),
+            .groups = "drop") %>%
+  summarise(conversion_rate = mean(converted))
+
+test_conversion_rate
+```
+
+Model 2 simulation
+
+```{r simulation_2_initial}
+initial_distribution_2 <- transitions_2 %>%
+  filter(step == 0) %>%
+  count(current_state) %>%
+  mutate(probability = n / sum(n))
+
+initial_distribution_2
+```
+
+Simulation from model 2
+
+```{r simulation_2}
+simulation_2 <- simulate_customers(
+  n_customers = 10000,
+  matrices = matrices_2,
+  initial_distribution = initial_distribution_2,
+  absorbing_states = "Conversion",
+  max_steps = max_prediction_step)
+```
+
+Summarise some simulated journeys
+
+```{r simulation_2_outcomes}
+simulation_outcomes_2 <- simulation_2 %>%
+  group_by(customer_id) %>%
+  summarise(final_state = last(state),
+            journey_length = max(step),
+            .groups = "drop")
+
+# View some simulated journey summaries
+head(simulation_outcomes_2)
+```
+
+Compare simulated and test data journey lengths
+
+```{r simulated_vs_test_lengths}
+# Test data journeys
+test_lengths_2 <- transitions_2_test %>%
+  group_by(user_id, session_id) %>%
+  summarise(journey_length = max(step) + 1,
+            .groups = "drop")
+
+# Comparison table
+length_comparison_2 <- data.frame(Metric = c("Number of journeys",
+                                             "Mean journey length",
+                                             "Median journey length",
+                                             "Standard deviation",
+                                             "Minimum journey length",
+                                             "Maximum journey length"),
+  
+  Test_data = c(nrow(test_lengths_2),
+                mean(test_lengths_2$journey_length),
+                median(test_lengths_2$journey_length),
+                sd(test_lengths_2$journey_length),
+                min(test_lengths_2$journey_length),
+                max(test_lengths_2$journey_length)),
+  
+  Simulation = c(nrow(simulation_outcomes_2),
+                 mean(simulation_outcomes_2$journey_length),
+                 median(simulation_outcomes_2$journey_length),
+                 sd(simulation_outcomes_2$journey_length),
+                 min(simulation_outcomes_2$journey_length),
+                 max(simulation_outcomes_2$journey_length)))
+
+length_comparison_2
+```
+
+Should I make a version that also uses previous journey outcome as a predictor?
+
+Need another baseline model to compare this one to:
+Have homogenous Markov model
+Also use regression model of some type (maybe just GLM)
