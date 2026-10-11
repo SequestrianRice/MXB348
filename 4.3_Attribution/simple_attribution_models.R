@@ -128,3 +128,8 @@ ggplot(all_mod_plot, aes(x = conv_type, y = value, group = channel_name)) +
   labs(x = 'Model', y = 'Conversions') +
   ggtitle('Models comparison') +
   guides(colour = guide_legend(override.aes = list(size = 4)))
+
+## PROBABILISTIC
+
+
+## LOGISTIC REGRESSION
