@@ -6,7 +6,8 @@ library(ChannelAttribution)
 library(markovchain)
 
 # Data
-attribution_v3
+attribution_v3 <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_full.csv")
+
 
 # ------------------------------
 # 4.3.1a Overall Conversion Rate
@@ -58,27 +59,6 @@ aMarkov$rate <- aMarkov$total_conversions / aMarkov$all_conversions * 100
 # 4.3.2a Journey Length Impact - Short vs Long
 # --------------------------------------------
 
-## touchpoint grouping
-# Singular = 1
-# Tiny = 2-3
-# Short = 4-5
-# Medium = 6-10
-# Long = 11-15
-# Very Long = 15+
-
-attribution_v3$touchpoint_count <- as.numeric(attribution_v3$touchpoint_count)
-
-attribution_v3 <- attribution_v3 %>%
-  mutate(touchpoint_length = case_when(
-    touchpoint_count ==   1                 ~ "Singular",
-    touchpoint_count %in% c(2,3)            ~ "Tiny",
-    touchpoint_count %in% c(4,5,6)          ~ "Short",
-    touchpoint_count %in% c(7,8,9,10)       ~ "Medium",
-    touchpoint_count %in% c(11,12,13,14,15) ~ "Long",
-    touchpoint_count >    15                ~ "Very Long"))
-
-lengths <- c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long")
-
 touchpoint_groups <- attribution_v3 %>%
   filter(conversion == "1") %>%
   count(touchpoint_length, name = "conversion_count") %>%
@@ -127,8 +107,11 @@ aMarkov_tpLengths %>%
 # 4.3.2b Collapsed Journeys
 # -------------------------
 
+attcol <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_collapsed.csv")
+
 # ---------------------------
 # 4.3.3 Levels of Granularity
 # ---------------------------
 
+attgran <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_granulated.csv")
 

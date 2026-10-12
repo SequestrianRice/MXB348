@@ -34,7 +34,6 @@ results <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/results-3.csv")
 # Feature Engineering
 # -------------------
 
-
 # CHANNEL NAME SYSTEM
 journeyA <- journey %>%
   mutate(channel = fct_recode(channel,
@@ -102,10 +101,125 @@ for (channel in channels) {
   attribution_v3[[channel]] <- str_count(attribution_v3$path, paste0("\\b", channel, "\\b"))
 }
 
-## touchpoint grouping
-# Short = 1-5
-# Medium = 6-10
-# Long = 11-15
-# Mental > 15
+# ----------------
+# ATTRIBUTION V3.1
+# ----------------
+  # NEW COLUMNS: categories for journey length
+  # FACTORISATION: removed factorisation for journey length
 
-attribution_v3$touchpoint_count <- as.factor(attribution_v3$touchpoint_count)
+attribution_v3.1 <- attribution_v3 %>%
+  mutate(touchpoint_length = case_when(
+    touchpoint_count ==   1                 ~ "Singular",
+    touchpoint_count %in% c(2,3)            ~ "Tiny",
+    touchpoint_count %in% c(4,5,6)          ~ "Short",
+    touchpoint_count %in% c(7,8,9,10)       ~ "Medium",
+    touchpoint_count %in% c(11,12,13,14,15) ~ "Long",
+    touchpoint_count >    15                ~ "Very Long"))
+
+lengths <- c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long")
+
+# REMOVE THINGS
+rm(attribution_v1, attribution_v2, attribution_v3, journeyA, journeyA_wide, merge1)
+
+# -----------------------------------------------------------
+# ALTERNATIVE DATAFRAMES (for collapsed and granulated paths)
+# -----------------------------------------------------------
+
+# Function for collapsing runs (AI Generated)
+collapse_runs <- function(x) {
+  x <- str_trim(x)
+  x <- x[x != ""]
+  x[c(TRUE, x[-1] != x[-length(x)])]
+}
+
+# COLLAPSED
+# ---------
+
+attcol_v3.1 <- attribution_v3.1 %>%
+  mutate(path_col = map_chr(
+    str_split(path, "\\s*>\\s*"),
+    ~ str_c(collapse_runs(.x), collapse = " > "))) %>%
+  select(-path, -touchpoint_count,
+         -GD, -GS, -FO, -MI, -MF, -FD, -FE, -GY,
+         -touchpoint_length)
+
+n_touchpoint <- attcol_v3.1$path_col %>%
+  str_count(">") + 1
+
+attcol_v3.1$touchpoint_count <- n_touchpoint
+
+for (channel in channels) {
+  attcol_v3.1[[channel]] <- str_count(attcol_v3.1$path_col, paste0("\\b", channel, "\\b"))
+}
+
+attcol_v3.1 <- attcol_v3.1 %>%
+  mutate(touchpoint_length = case_when(
+    touchpoint_count ==   1                 ~ "Singular",
+    touchpoint_count %in% c(2,3)            ~ "Tiny",
+    touchpoint_count %in% c(4,5,6)          ~ "Short",
+    touchpoint_count %in% c(7,8,9,10)       ~ "Medium",
+    touchpoint_count %in% c(11,12,13,14,15) ~ "Long",
+    touchpoint_count >    15                ~ "Very Long"))
+
+attcol_v3.1 <- attcol_v3.1 %>%
+  relocate(path_col, .before = first_touchpoint) %>%
+  relocate(touchpoint_count, .before = customer_conversion_count) %>%
+  relocate(touchpoint_length, .before = customer_conversion_count)
+
+# GRANULATED
+# ----------
+
+channel_groups <- c(GD = "Google",
+                    GS = "Google",
+                    FO = "Free",
+                    MI = "Meta",
+                    MF = "Meta",
+                    FD = "Free",
+                    FE = "Free",
+                    GY = "Google")
+
+channels_granulated <- c("Free", "Google", "Meta")
+
+attgran_v3.1 <- attribution_v3.1 %>%
+  mutate(path_gran = map_chr(
+  str_split(path, "\\s*>\\s*"),
+  ~ str_c(collapse_runs(unname(channel_groups[str_trim(.x)])),
+          collapse = " > "))) %>%
+  select(-path, -touchpoint_count,
+         -GD, -GS, -FO, -MI, -MF, -FD, -FE, -GY,
+         -touchpoint_length)
+
+n_touchpoint <- attgran_v3.1$path_gran %>%
+  str_count(">") + 1
+
+attgran_v3.1$touchpoint_count <- n_touchpoint
+
+for (channel in channels_granulated) {
+  attgran_v3.1[[channel]] <- str_count(attgran_v3.1$path_gran, paste0("\\b", channel, "\\b"))
+}
+
+attgran_v3.1 <- attgran_v3.1 %>%
+  mutate(touchpoint_length = case_when(
+    touchpoint_count ==   1                 ~ "Singular",
+    touchpoint_count %in% c(2,3)            ~ "Tiny",
+    touchpoint_count %in% c(4,5,6)          ~ "Short",
+    touchpoint_count %in% c(7,8,9,10)       ~ "Medium",
+    touchpoint_count %in% c(11,12,13,14,15) ~ "Long",
+    touchpoint_count >    15                ~ "Very Long"))
+
+attgran_v3.1 <- attgran_v3.1 %>%
+  relocate(path_gran, .before = first_touchpoint) %>%
+  relocate(touchpoint_count, .before = customer_conversion_count) %>%
+  relocate(touchpoint_length, .before = customer_conversion_count)
+
+# things i know need to be improved -- renaming first and last touchpoints
+
+# =========
+# SAVE DATA
+# =========
+
+write.csv(attribution_v3.1, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_full.csv", row.names=FALSE)
+write.csv(attcol_v3.1, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_collapsed.csv", row.names=FALSE)
+write.csv(attgran_v3.1, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_granulated.csv", row.names=FALSE)
+
+print("All done, stay swag")
