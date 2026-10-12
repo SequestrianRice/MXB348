@@ -3,81 +3,132 @@
 # Packages Used
 library(tidyverse)
 library(ChannelAttribution)
+library(markovchain)
 
 # Data
-ac2 <- attribution_v2
+attribution_v3
 
-## Updating attribution model
-attribution_v3 <- attribution_v2
+# ------------------------------
+# 4.3.1a Overall Conversion Rate
+# ------------------------------
+total_conversions <- sum(attribution_v3$conversion == "1")
+conversion_rate <- sum(attribution_v3$conversion == "1") / length(attribution_v3$conversion)
+  # = 0.5876 = conversion rate of 58.76%
 
-# Count for each channel in path
-for (channel in channels) {
-  attribution_v3[[channel]] <- str_count(attribution_v3$path, paste0("\\b", channel, "\\b"))
-}
+# -------------------------------------
+# 4.3.1b Channel Conversion Attribution
+# -------------------------------------
 
-## touchpoint grouping
-# Short = 1-5
-# Medium = 6-10
-# Long = 11-15
-# Mental > 15
-
-attribution_v3 <- attribution_v3 %>%
-  mutate(path_length = case_when(
-    touchpoint_count < 5 ~ "short",
-    touchpoint_count < 10 ~ "medium",
-    touchpoint_count < 15 ~ "long",
-    touchpoint_count >= 15 ~ "extreme"))
-
-# Coding the math first
-# x_(i,k) = total number of touches a media channel k has had in customer journey i.
 modeltest <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY,
                  data = attribution_v3,
                  family = binomial(link = "logit"))
 summary(modeltest)
 
-predict(modeltest, type = "response")
-
-par(mfrow = c(2,2))
-plot(modeltest)
-
-data(PathData)
-
-# ================
-# HEURISTIC MODELS
-# ================
-
-heuristic <- heuristic_models(Data = attribution_v3,
+# ++ HEURISTIC ++
+aHeuristic <- heuristic_models(Data = attribution_v3,
                  var_path = "path",
                  var_conv = "conversion",
                  sep =">")
 
-totalconversions <- sum(attribution_v3$conversion == "1")
-totalconversions
+# Channel Credit
+aHeuristic$first_touch <- aHeuristic$first_touch / total_conversions
+aHeuristic$last_touch <- aHeuristic$last_touch / total_conversions
+aHeuristic$linear_touch <- aHeuristic$linear_touch / total_conversions
 
-heuristic$conversions <- totalconversions
-# First Touch
-heuristic$first_touch_perc <- heuristic$first_touch / heuristic$conversions
-# Last Touch
-heuristic$last_touch_perc <- heuristic$last_touch / heuristic$conversions
-# Linear Touch
-heuristic$linear_touch_perc <- heuristic$linear_touch / heuristic$conversions
+# ++ MARKOV ++
 
-# ==========
-# DATA-DRIVEN: BAGGED LOGISTIC -- CHANNELS ONLY
-# ==========
+markov_array <- markov_model(attribution_v3,
+                        var_path = 'path',
+                        var_conv = 'conversion',
+                        var_null = 'null_conversion',
+                        out_more = TRUE)
+
+aMarkov <- markov_array$result
+aMarkov$all_conversions <- total_conversions
+aMarkov$rate <- aMarkov$total_conversions / aMarkov$all_conversions * 100
+
+# ++ LOGISTIC REGRESSION [UNUSED] ++
 
 # p = 1 / (1 + exp(-eta))
+# x_(i,k) = total number of touches a media channel k has had in customer journey i.
+
+# aLogistic <- glm(family = binomial(link = "logit"))
+
+# --------------------------------------------
+# 4.3.2a Journey Length Impact - Short vs Long
+# --------------------------------------------
+
+## touchpoint grouping
+# Singular = 1
+# Tiny = 2-3
+# Short = 4-5
+# Medium = 6-10
+# Long = 11-15
+# Very Long = 15+
+
+attribution_v3$touchpoint_count <- as.numeric(attribution_v3$touchpoint_count)
+
+attribution_v3 <- attribution_v3 %>%
+  mutate(touchpoint_length = case_when(
+    touchpoint_count ==   1                 ~ "Singular",
+    touchpoint_count %in% c(2,3)            ~ "Tiny",
+    touchpoint_count %in% c(4,5,6)          ~ "Short",
+    touchpoint_count %in% c(7,8,9,10)       ~ "Medium",
+    touchpoint_count %in% c(11,12,13,14,15) ~ "Long",
+    touchpoint_count >    15                ~ "Very Long"))
+
+lengths <- c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long")
+
+touchpoint_groups <- attribution_v3 %>%
+  filter(conversion == "1") %>%
+  count(touchpoint_length, name = "conversion_count") %>%
+  rename(Length = touchpoint_length)
+
+markov_array_lengths <- set_names(lengths) %>%
+  map(\(category) {
+    attribution_v3 |>
+      filter(touchpoint_length == category) %>%
+      markov_model(
+        var_path = "path",
+        var_conv = "conversion",
+        var_null = "null_conversion",
+        out_more = TRUE
+      )
+  })
+
+aMarkov_sin <- markov_array_lengths[["Singular"]]$result
+aMarkov_tin <- markov_array_lengths[["Tiny"]]$result
+aMarkov_sho <- markov_array_lengths[["Short"]]$result
+aMarkov_med <- markov_array_lengths[["Medium"]]$result
+aMarkov_lon <- markov_array_lengths[["Long"]]$result
+aMarkov_vlo <- markov_array_lengths[["Very Long"]]$result
+
+aMarkov_sin$Length <- "Singular"
+aMarkov_tin$Length <- "Tiny"
+aMarkov_sho$Length <- "Short"
+aMarkov_med$Length <- "Medium"
+aMarkov_lon$Length <- "Long"
+aMarkov_vlo$Length <- "Very Long"
+
+aMarkov_tpLengths <- rbind(aMarkov_sin, aMarkov_tin, aMarkov_sho, 
+                           aMarkov_med, aMarkov_lon, aMarkov_vlo)
+
+aMarkov_tpLengths <- aMarkov_tpLengths %>%
+  left_join(touchpoint_groups, by = "Length")
+
+aMarkov_tpLengths$all_conversions <- total_conversions
+aMarkov_tpLengths$rate <- aMarkov_tpLengths$total_conversions / aMarkov_tpLengths$conversion_count * 100
+
+aMarkov_tpLengths %>%
+  ggplot(aes(y = rate, x = Length, colour = channel_name)) +
+  geom_point()
+
+# -------------------------
+# 4.3.2b Collapsed Journeys
+# -------------------------
+
+# ---------------------------
+# 4.3.3 Levels of Granularity
+# ---------------------------
 
 
-
-# ==========
-# DATA-DRIVEN: BAGGED LOGISTIC -- JOURNEY LENGTH
-# ==========
-
-# ==========
-# DATA-DRIVEN: BAGGED LOGISTIC -- COLLAPSED JOURNEYS
-# ==========
-
-# ==========
-# DATA-DRIVEN: BAGGED LOGISTIC -- CHANNEL GROUPING
-# ==========

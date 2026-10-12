@@ -15,7 +15,7 @@ library(ggrepel)
 
 
 # calculating the models (Markov and heuristics)
-mod2 <- markov_model(attribution_v2,
+mod2 <- markov_model(attribution_v3,
                      var_path = 'path',
                      var_conv = 'conversion',
                      var_null = 'null_conversion',
@@ -25,7 +25,7 @@ mod2 <- markov_model(attribution_v2,
 # instead of:
 # h_mod2 <- heuristic_models(attribution_v2, var_path = 'path', var_conv = 'conversion')
 
-df_hm <- attribution_v2 %>%
+df_hm <- attribution_v3 %>%
   mutate(channel_name_ft = sub('>.*', '', path),
          channel_name_ft = sub(' ', '', channel_name_ft),
          channel_name_lt = sub('.*>', '', path),
