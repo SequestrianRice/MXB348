@@ -30,10 +30,54 @@ attribution_v3 <- attribution_v3 %>%
 
 # Coding the math first
 # x_(i,k) = total number of touches a media channel k has had in customer journey i.
-modeltest <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY + 
-                   returning + customer_journey_count + path_length,
+modeltest <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY,
                  data = attribution_v3,
-                 family = binomial)
+                 family = binomial(link = "logit"))
 summary(modeltest)
 
+predict(modeltest, type = "response")
+
+par(mfrow = c(2,2))
+plot(modeltest)
+
 data(PathData)
+
+# ================
+# HEURISTIC MODELS
+# ================
+
+heuristic <- heuristic_models(Data = attribution_v3,
+                 var_path = "path",
+                 var_conv = "conversion",
+                 sep =">")
+
+totalconversions <- sum(attribution_v3$conversion == "1")
+totalconversions
+
+heuristic$conversions <- totalconversions
+# First Touch
+heuristic$first_touch_perc <- heuristic$first_touch / heuristic$conversions
+# Last Touch
+heuristic$last_touch_perc <- heuristic$last_touch / heuristic$conversions
+# Linear Touch
+heuristic$linear_touch_perc <- heuristic$linear_touch / heuristic$conversions
+
+# ==========
+# DATA-DRIVEN: BAGGED LOGISTIC -- CHANNELS ONLY
+# ==========
+
+# p = 1 / (1 + exp(-eta))
+
+
+
+# ==========
+# DATA-DRIVEN: BAGGED LOGISTIC -- JOURNEY LENGTH
+# ==========
+
+# ==========
+# DATA-DRIVEN: BAGGED LOGISTIC -- COLLAPSED JOURNEYS
+# ==========
+
+# ==========
+# DATA-DRIVEN: BAGGED LOGISTIC -- CHANNEL GROUPING
+# ==========
