@@ -51,31 +51,31 @@ colnames(all_models)[c(1, 4)] <- c('channel_name', 'attrib_model_conversions')
 df_plot_trans <- mod2$transition_matrix
 
   # Channel names - assume that it is in same order as h_mod2
-df_plot_trans <- df_plot_trans %>%
+aTrans <- aTrans %>%
   mutate(channel_from = fct_recode(channel_from,
-                                   "GD" = "1",
-                                   "GS" = "2",
-                                   "FO" = "3",
-                                   "MI" = "4",
-                                   "MF" = "5",
-                                   "FD" = "6",
-                                   "FE" = "7",
-                                   "GY" = "8"),
+                                   "Google Display" = "1",
+                                   "Google Search" = "2",
+                                   "Organic" = "3",
+                                   "Instagram" = "4",
+                                   "Facebook" = "5",
+                                   "Display" = "6",
+                                   "Email" = "7",
+                                   "Youtube" = "8"),
          channel_to = fct_recode(channel_to,
-                                 "GD" = "1",
-                                 "GS" = "2",
-                                 "FO" = "3",
-                                 "MI" = "4",
-                                 "MF" = "5",
-                                 "FD" = "6",
-                                 "FE" = "7",
-                                 "GY" = "8"))
+                                 "Google Display" = "1",
+                                 "Google Search" = "2",
+                                 "Organic" = "3",
+                                 "Instagram" = "4",
+                                 "Facebook" = "5",
+                                 "Display" = "6",
+                                 "Email" = "7",
+                                 "Youtube" = "8"))
 
 cols <- c("#e7f0fa", "#c9e2f6", "#95cbee", "#0099dc", "#4ab04a", "#ffd73e", "#eec73a",
           "#e29421", "#e29421", "#f05336", "#ce472e")
-t <- max(df_plot_trans$transition_probability)
+t <- max(aTrans$transition_probability)
 
-ggplot(df_plot_trans, aes(y = channel_from, x = channel_to, fill = transition_probability)) +
+ggplot(aTrans, aes(y = channel_from, x = channel_to, fill = transition_probability)) +
   theme_minimal() +
   geom_tile(colour = "white", width = .9, height = .9) +
   scale_fill_gradientn(colours = cols, limits = c(0, t),

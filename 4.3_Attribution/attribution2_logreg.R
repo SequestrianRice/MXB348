@@ -32,9 +32,9 @@ aHeuristic <- heuristic_models(Data = attribution_v3,
                  sep =">")
 
 # Channel Credit
-aHeuristic$first_touch <- aHeuristic$first_touch / total_conversions
-aHeuristic$last_touch <- aHeuristic$last_touch / total_conversions
-aHeuristic$linear_touch <- aHeuristic$linear_touch / total_conversions
+aHeuristic$first_touch <- aHeuristic$first_touch / total_conversions * 100
+aHeuristic$last_touch <- aHeuristic$last_touch / total_conversions * 100
+aHeuristic$linear_touch <- aHeuristic$linear_touch / total_conversions * 100
 
 # ++ MARKOV ++
 
@@ -47,6 +47,20 @@ markov_array <- markov_model(attribution_v3,
 aMarkov <- markov_array$result
 aMarkov$all_conversions <- total_conversions
 aMarkov$rate <- aMarkov$total_conversions / aMarkov$all_conversions * 100
+
+aModel <- cbind(aHeuristic, aMarkov$rate)
+
+aModel <- aModel %>%
+  rename(markov_touch = `aMarkov$rate`)
+
+aModel %>%
+ggplot()
+
+aTrans <- markov_array$transition_matrix
+
+aTrans$transition_probability <- aTrans$transition_probability * 100
+
+
 
 # ++ LOGISTIC REGRESSION [UNUSED] ++
 
@@ -64,9 +78,11 @@ touchpoint_groups <- attribution_v3 %>%
   count(touchpoint_length, name = "conversion_count") %>%
   rename(Length = touchpoint_length)
 
+lengths <- c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long")
+
 markov_array_lengths <- set_names(lengths) %>%
   map(\(category) {
-    attribution_v3 |>
+    attribution_v3 %>%
       filter(touchpoint_length == category) %>%
       markov_model(
         var_path = "path",
@@ -99,9 +115,15 @@ aMarkov_tpLengths <- aMarkov_tpLengths %>%
 aMarkov_tpLengths$all_conversions <- total_conversions
 aMarkov_tpLengths$rate <- aMarkov_tpLengths$total_conversions / aMarkov_tpLengths$conversion_count * 100
 
+aMarkov_tpLengths$Length <- factor(aMarkov_tpLengths$Length,
+                                   levels = c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long"))
+
 aMarkov_tpLengths %>%
   ggplot(aes(y = rate, x = Length, colour = channel_name)) +
-  geom_point()
+  geom_point(size = 3) +
+  labs(title = "Full Journey Grouped Length Comparison",
+       y = "Channel Credit %",
+       x = "Journey Length Group")
 
 # -------------------------
 # 4.3.2b Collapsed Journeys
