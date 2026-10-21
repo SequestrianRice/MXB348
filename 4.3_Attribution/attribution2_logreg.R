@@ -60,10 +60,6 @@ aTrans <- markov_array$transition_matrix
 
 aTrans$transition_probability <- aTrans$transition_probability * 100
 
-
-
-# ++ LOGISTIC REGRESSION [UNUSED] ++
-
 # p = 1 / (1 + exp(-eta))
 # x_(i,k) = total number of touches a media channel k has had in customer journey i.
 

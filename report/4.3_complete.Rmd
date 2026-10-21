@@ -1,0 +1,1081 @@
+---
+title: "4.3-Attribution_Modelling"
+author: "Retief Padget"
+date: "2026-10-19"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 4.3 Overview
+
+# Literature Review
+
+## What is attribution modelling?
+
+## Heuristic vs Data-Driven
+
+# Initialisation
+
+## Packages
+
+```{r packages, message=FALSE, echo=FALSE}
+library(ChannelAttribution)
+library(tidyverse)
+library(markovchain)
+library(data.table)
+library(reshape2)
+library(igraph)
+library(RColorBrewer)
+library(patchwork)
+library(ggh4x)
+library(paletteer)
+```
+
+## Load Data
+
+```{r data, message=FALSE, echo=FALSE}
+journey <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/customer_journey-4.csv")
+results <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/results-3.csv")
+```
+
+# Feature Engineering
+
+```{r data manipulation 1, message=FALSE, echo=FALSE}
+# CHANNEL NAME SYSTEM
+journey <- journey %>%
+  mutate(channel = fct_recode(channel,
+                              "GD" = "Google Display",
+                              "GS" = "Google Search",
+                              "FO" = "Organic",
+                              "FD" = "Direct",
+                              "GY" = "Youtube",
+                              "MI" = "Instagram",
+                              "MF" = "Facebook",
+                              "FE" = "Email Marketing")) # Codename: 1st Letter = Group, 2nd Letter = Channel
+# CHANNEL JOURNEY (WHOLE)
+journey <- setDT(journey)
+journey_wide = data.table::dcast(data = journey, formula = user_id + session_id ~ order, value.var = "channel")
+# Clarify that dcast is from "data.table". Assumes "reshape2" if both installed.
+journey_wide <- journey_wide[, path:=do.call(paste,c(.SD, sep=" > ")), .SDcols=-c(1,2)]
+journey_wide <- journey_wide[, path:=word(path, 1, sep = " > NA")]
+journey_wide <- journey_wide %>% select(-c("0":"25"))
+
+# FIRST + LAST CHANNEL
+journey_wide <- journey_wide %>% 
+  mutate("first_touchpoint" = str_extract(path, "^.."),
+         "last_touchpoint" = str_extract(path, "..$"))
+
+# TOTAL JOURNEY TIME
+journey <- journey %>%
+  filter(order == 0) %>%
+  select(-c("order", "channel"))
+
+merge <- inner_join(journey_wide, journey, by = c("user_id", "session_id"))
+attribution <- inner_join(merge, results, by = c("user_id", "session_id"))
+
+# TOTAL TOUCHPOINT COUNT
+n_touchpoint <- attribution$path %>%
+  str_count(">") + 1
+
+attribution$touchpoint_count <- n_touchpoint
+
+# TOTAL CONVERSIONS (from first to current customer journey)
+attribution <- attribution %>%
+  group_by(user_id) %>%
+  mutate(customer_conversion_count = cumsum(conversion == 1),
+         customer_journey_count = session_id + 1,
+         customer_conversion_rate = round(customer_conversion_count/customer_journey_count, 3),
+         returning = n() > 1) %>%
+  ungroup()
+
+# FOR FIRST-ORDER MARKOV CHAIN -- Null Conversion
+attribution <- attribution %>%
+  mutate(null_conversion = 1 - conversion)
+
+# FOR LOGISTIC REGRESSION -- Channel Touchpoint Counts
+channels <- c("GD", "GS", "FO", "MI", "MF", "FD", "FE", "GY")
+
+for (channel in channels) {
+  attribution[[channel]] <- str_count(attribution$path, paste0("\\b", channel, "\\b"))
+}
+
+# Journey Length
+attribution <- attribution %>%
+  mutate(touchpoint_length = case_when(
+    touchpoint_count ==   1                 ~ "Singular",
+    touchpoint_count %in% c(2,3)            ~ "Tiny",
+    touchpoint_count %in% c(4,5,6)          ~ "Short",
+    touchpoint_count %in% c(7,8,9,10)       ~ "Medium",
+    touchpoint_count %in% c(11,12,13,14,15) ~ "Long",
+    touchpoint_count >    15                ~ "Very Long"))
+
+# Column Relocation
+attribution <- attribution %>%
+  relocate(null_conversion, .after = conversion) %>%
+  relocate(touchpoint_length, .before = customer_conversion_count)
+
+# Remove unecessary elements
+rm(journey, journey_wide, results, merge)
+```
+
+## Alternative dataframes
+
+```{r collapse function, message=FALSE, echo=FALSE}
+# .:!!!WARNING!!!:. TAKES A FEW MINUTES TO RUN .:!!!WARNING!!!:.
+
+# Function for collapsing runs (AI Generated)
+collapse_runs <- function(x) {
+  x <- str_trim(x)
+  x <- x[x != ""]
+  x[c(TRUE, x[-1] != x[-length(x)])]
+}
+
+# ----------------
+# COLLAPSING PATHS
+# ----------------
+
+attcol <- attribution %>%
+  mutate(path_col = map_chr(
+    str_split(path, "\\s*>\\s*"),
+    ~ str_c(collapse_runs(.x), collapse = " > "))) %>%
+  select(-path, -touchpoint_count, -touchpoint_length,
+         -GD, -GS, -FO, -MI, -MF, -FD, -FE, -GY)
+
+# -----------------
+# GRANULATING PATHS
+# -----------------
+
+channel_groups <- c(GD = "Ggle",
+                    GS = "Ggle",
+                    FO = "Free",
+                    MI = "Meta",
+                    MF = "Meta",
+                    FD = "Free",
+                    FE = "Free",
+                    GY = "Ggle")
+
+channels_granulated <- c("Free", "Ggle", "Meta")
+
+attgran <- attribution %>%
+  mutate(path_gran = map_chr(
+  str_split(path, "\\s*>\\s*"),
+  ~ str_c(collapse_runs(unname(channel_groups[str_trim(.x)])),
+          collapse = " > "))) %>%
+  select(-path, -touchpoint_count, -touchpoint_length,
+         -first_touchpoint, -last_touchpoint,
+         -GD, -GS, -FO, -MI, -MF, -FD, -FE, -GY)
+```
+
+```{r alt data edits, message=FALSE, echo=FALSE}
+# ---------------
+# COLLAPSED PATHS
+# ---------------
+
+# Touchpoint Analysis
+n_touchpoint <- attcol$path_col %>%
+  str_count(">") + 1
+
+attcol$touchpoint_count <- n_touchpoint
+
+for (channel in channels) {
+  attcol[[channel]] <- str_count(attcol$path_col, paste0("\\b", channel, "\\b"))
+}
+
+attcol <- attcol %>%
+  mutate(touchpoint_length = case_when(
+    touchpoint_count ==   1                 ~ "Singular",
+    touchpoint_count %in% c(2,3)            ~ "Tiny",
+    touchpoint_count %in% c(4,5,6)          ~ "Short",
+    touchpoint_count %in% c(7,8,9,10)       ~ "Medium",
+    touchpoint_count %in% c(11,12,13,14,15) ~ "Long",
+    touchpoint_count >    15                ~ "Very Long"))
+
+# Column Relocation
+attcol <- attcol %>%
+  relocate(path_col, .before = first_touchpoint) %>%
+  relocate(touchpoint_count, .before = customer_conversion_count) %>%
+  relocate(touchpoint_length, .before = customer_conversion_count)
+
+# ----------------
+# GRANULATED PATHS
+# ----------------
+
+# Touchpoint Analysis
+n_touchpoint <- attgran$path_gran %>%
+  str_count(">") + 1
+
+attgran$touchpoint_count <- n_touchpoint
+
+for (channel in channels_granulated) {
+  attgran[[channel]] <- str_count(attgran$path_gran, paste0("\\b", channel, "\\b"))
+}
+
+attgran <- attgran %>%
+  mutate(touchpoint_length = case_when(
+    touchpoint_count ==   1                 ~ "Singular",
+    touchpoint_count %in% c(2,3)            ~ "Tiny",
+    touchpoint_count %in% c(4,5,6)          ~ "Short",
+    touchpoint_count %in% c(7,8,9,10)       ~ "Medium",
+    touchpoint_count %in% c(11,12,13,14,15) ~ "Long",
+    touchpoint_count >    15                ~ "Very Long")) %>%
+  mutate("first_touchpoint" = str_extract(path_gran, "^...."),
+         "last_touchpoint" = str_extract(path_gran, "....$"))
+
+# Column Relocation
+attgran <- attgran %>%
+  relocate(path_gran, .before = time_till_session_end) %>%
+  relocate(touchpoint_count, .before = customer_conversion_count) %>%
+  relocate(touchpoint_length, .before = customer_conversion_count) %>%
+  relocate(first_touchpoint, .before = time_till_session_end) %>%
+  relocate(last_touchpoint, .before = time_till_session_end)
+```
+
+```{r save new datasets, message=FALSE, echo=FALSE}
+
+write.csv(attribution, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_full.csv", row.names=FALSE)
+write.csv(attcol, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_collapsed.csv", row.names=FALSE)
+write.csv(attgran, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_granulated.csv", row.names=FALSE)
+
+print("All done, stay swag")
+
+```
+
+# Model Setup
+
+```{r model start, message=FALSE, echo=FALSE}
+rm(list = ls())
+
+# RELOAD DATA
+DataA <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_full.csv")
+DataC <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_collapsed.csv")
+DataG <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_granulated.csv")
+
+# VALUES
+# Conversion Count
+total_conversions <- sum(DataA$conversion == "1")
+# Conversion Rate
+conversion_rate <- sum(DataA$conversion == "1") / length(DataA$conversion)
+
+```
+
+## 4.3.1 Standard
+
+### Heuristic Models
+
+```{r heuristic, message=FALSE, echo=FALSE}
+aHeuristic <- heuristic_models(Data = DataA,
+                 var_path = "path",
+                 var_conv = "conversion",
+                 sep =">")
+
+# First-Touch Attribution
+aHeuristic$first_touch <- aHeuristic$first_touch / total_conversions * 100
+
+# Last-Touch Attribution
+aHeuristic$last_touch <- aHeuristic$last_touch / total_conversions * 100
+
+# Linear Attribution
+aHeuristic$linear_touch <- aHeuristic$linear_touch / total_conversions * 100
+```
+
+### Data-Driven Models
+
+Logistic Regression
+
+```{r regression, message=FALSE, echo=FALSE}
+Data_Log <- DataA %>%
+  select(-first_touchpoint,
+         -last_touchpoint,
+         -time_till_session_end,
+         -customer_conversion_count,
+         -customer_journey_count,
+         -customer_conversion_rate,
+         -null_conversion,
+         -returning,
+         -touchpoint_length)
+
+aLog <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY,
+                 data = DataA,
+                 family = binomial(link = "logit"))
+summary(aLog)
+
+# Significant channels: Search, Organic, Instagram, Facebook, Email
+
+coefficient_names <- c("Intercept", "Display", "Seach",
+                       "Organic", "Instagram", "Facebook",
+                       "Direct", "Email", "Youtube")
+
+coefficient_names_abv <- c("B0", "GD", "GS", "FO", "MI", "MF", "FD", "FE", "GY")
+
+significant <- c(1, 0, 1, 1, 1 ,1, 0, 1, 0)
+
+aLog_coefficients <- data.frame(name = coefficient_names,
+                                name_abv = coefficient_names_abv,
+                                coefficient = aLog$coefficients, 
+                                significant)
+
+aLog_coefficients <- aLog_coefficients[-1, ] # Removes Intercept Row
+
+# Insignificant channels do not have coefficient = 0 [Display, Direct, Youtube]
+aLog_coefficients$coefficient[aLog_coefficients$significant == 0] <- 0 
+
+# Breakdown of math
+
+B_0 = 0.392660 # Intercept coefficient
+
+# x = B_0 + B_Ck
+# p_ij_hat == path channel count * (1 + exp(-x))^(-1)
+Data_Log$GD <- Data_Log$GD * (1 + exp(-(B_0 + aLog_coefficients$coefficient[1])))^(-1)
+
+Data_Log$GS <- Data_Log$GS * (1 + exp(-(B_0 + aLog_coefficients$coefficient[2])))^(-1)
+
+Data_Log$FO <- Data_Log$FO * (1 + exp(-(B_0 + aLog_coefficients$coefficient[3])))^(-1)
+
+Data_Log$MI <- Data_Log$MI * (1 + exp(-(B_0 + aLog_coefficients$coefficient[4])))^(-1)
+
+Data_Log$MF <- Data_Log$MF * (1 + exp(-(B_0 + aLog_coefficients$coefficient[5])))^(-1)
+
+Data_Log$FD <- Data_Log$FD * (1 + exp(-(B_0 + aLog_coefficients$coefficient[6])))^(-1)
+
+Data_Log$FE <- Data_Log$FE * (1 + exp(-(B_0 + aLog_coefficients$coefficient[7])))^(-1)
+
+Data_Log$GY <- Data_Log$GY * (1 + exp(-(B_0 + aLog_coefficients$coefficient[8])))^(-1)
+
+Data_Log <- Data_Log %>%
+  mutate(attribution_sum = rowSums(.[6:13]))
+
+# a_ij_hat == p_ij_hat / SUM(p_ir_hat) * y_i [= 1 or 0]
+Data_Log$GD <- Data_Log$GD / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$GS <- Data_Log$GS / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$FO <- Data_Log$FO / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$MI <- Data_Log$MI / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$MF <- Data_Log$MF / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$FD <- Data_Log$FD / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$FE <- Data_Log$FE / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$GY <- Data_Log$GY / Data_Log$attribution_sum * Data_Log$conversion
+
+logreg_count <- colSums(Data_Log[,6:13])
+logreg_touch <- logreg_count / sum(logreg_count) * 100
+show(logreg_touch)
+
+```
+
+First-order Markov Chain
+
+```{r markov, message=FALSE, echo=FALSE}
+markov_array <- markov_model(DataA,
+                        var_path = 'path',
+                        var_conv = 'conversion',
+                        var_null = 'null_conversion',
+                        out_more = TRUE)
+
+aMarkov <- markov_array$result
+aMarkov$all_conversions <- total_conversions
+aMarkov$rate <- aMarkov$total_conversions / aMarkov$all_conversions * 100
+
+aModel <- cbind(aHeuristic, aMarkov$rate)
+
+aModel <- aModel %>%
+  rename(markov_touch = `aMarkov$rate`)
+
+aTrans <- markov_array$transition_matrix
+
+aTrans$transition_probability <- aTrans$transition_probability * 100
+```
+
+Combine
+
+```{r model results, message=FALSE, echo=FALSE}
+ModelRates <- cbind(aModel, logreg_touch)
+print(ModelRates)
+
+ModelRates <- ModelRates %>%
+  mutate(channel_name = fct_recode(channel_name,
+                              "Google Display" = "GD",
+                              "Google Search" = "GS",
+                              "Organic" = "FO",
+                              "Direct" = "FD",
+                              "Youtube" = "GY",
+                              "Instagram" = "MI",
+                              "Facebook" = "MF",
+                              "Email Marketing" = "FE"))
+
+model4.3.1 <- cbind(ModelRates[1], stack(ModelRates[2:6]))
+print(model4.3.1)
+
+rm(ModelRates, aHeuristic, aMarkov, aLog_coefficients, markov_array, logreg_count,
+   logreg_touch, Data_Log, aModel)
+```
+
+## 4.3.2a Journey Group
+
+### Heuristic Models
+```{r bad, echo = F, message = F}
+touchpoint_groups <- DataA %>%
+  filter(conversion == "1") %>%
+  count(touchpoint_length, name = "conversion_count") %>%
+  rename(Length = touchpoint_length)
+
+lengths <- c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long")
+
+heuristic_array_lengths <- set_names(lengths) %>%
+  map(\(category) {
+    DataA %>%
+      filter(touchpoint_length == category) %>%
+      heuristic_models(
+        var_path = "path",
+        var_conv = "conversion"
+      )
+  })
+
+aHeuristic_sin <- heuristic_array_lengths$Singular
+aHeuristic_tin <- heuristic_array_lengths$Tiny
+aHeuristic_sho <- heuristic_array_lengths$Short
+aHeuristic_med <- heuristic_array_lengths$Medium
+aHeuristic_lon <- heuristic_array_lengths$Long
+aHeuristic_vlo <- heuristic_array_lengths$`Very Long`
+
+aHeuristic_sin$Length <- "Singular"
+aHeuristic_tin$Length <- "Tiny"
+aHeuristic_sho$Length <- "Short"
+aHeuristic_med$Length <- "Medium"
+aHeuristic_lon$Length <- "Long"
+aHeuristic_vlo$Length <- "Very Long"
+
+aHeuristic_tpLengths <- rbind(aHeuristic_sin, aHeuristic_tin, aHeuristic_sho, 
+                           aHeuristic_med, aHeuristic_lon, aHeuristic_vlo)
+
+aHeuristic_tpLengths <- aHeuristic_tpLengths %>%
+  left_join(touchpoint_groups, by = "Length")
+
+aHeuristic_tpLengths$all_conversions <- total_conversions
+aHeuristic_tpLengths$rate_ft <- aHeuristic_tpLengths$first_touch / aHeuristic_tpLengths$conversion_count * 100
+aHeuristic_tpLengths$rate_lt <- aHeuristic_tpLengths$last_touch / aHeuristic_tpLengths$conversion_count * 100
+aHeuristic_tpLengths$rate_ln <- aHeuristic_tpLengths$linear_touch / aHeuristic_tpLengths$conversion_count * 100
+
+aHeuristic_tpLengths$Length <- factor(aHeuristic_tpLengths$Length,
+                                   levels = c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long"))
+
+rm(aHeuristic_lon, aHeuristic_med, aHeuristic_sho, aHeuristic_sin, aHeuristic_tin, aHeuristic_vlo, 
+   heuristic_array_lengths)
+```
+
+### Data-Driven Models
+
+Logistic Regression
+```{r regression, message=FALSE, echo=FALSE}
+DataA$touchpoint_length <- factor(DataA$touchpoint_length,
+                                         ordered = FALSE)
+
+aLog_tpL <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY + 
+                  relevel(touchpoint_length, ref = "Singular"),
+                 data = DataA,
+                 family = binomial(link = "logit"))
+summary(aLog_tpL)
+```
+First-order Markov Chain
+```{r bad, echo = F, message = F}
+touchpoint_groups <- DataA %>%
+  filter(conversion == "1") %>%
+  count(touchpoint_length, name = "conversion_count") %>%
+  rename(Length = touchpoint_length)
+
+lengths <- c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long")
+
+markov_array_lengths <- set_names(lengths) %>%
+  map(\(category) {
+    DataA %>%
+      filter(touchpoint_length == category) %>%
+      markov_model(
+        var_path = "path",
+        var_conv = "conversion",
+        var_null = "null_conversion",
+        out_more = TRUE
+      )
+  })
+
+aMarkov_sin <- markov_array_lengths[["Singular"]]$result
+aMarkov_tin <- markov_array_lengths[["Tiny"]]$result
+aMarkov_sho <- markov_array_lengths[["Short"]]$result
+aMarkov_med <- markov_array_lengths[["Medium"]]$result
+aMarkov_lon <- markov_array_lengths[["Long"]]$result
+aMarkov_vlo <- markov_array_lengths[["Very Long"]]$result
+
+aMarkov_sin$Length <- "Singular"
+aMarkov_tin$Length <- "Tiny"
+aMarkov_sho$Length <- "Short"
+aMarkov_med$Length <- "Medium"
+aMarkov_lon$Length <- "Long"
+aMarkov_vlo$Length <- "Very Long"
+
+aMarkov_tpLengths <- rbind(aMarkov_sin, aMarkov_tin, aMarkov_sho, 
+                           aMarkov_med, aMarkov_lon, aMarkov_vlo)
+
+aMarkov_tpLengths <- aMarkov_tpLengths %>%
+  left_join(touchpoint_groups, by = "Length")
+
+aMarkov_tpLengths$all_conversions <- total_conversions
+aMarkov_tpLengths$rate <- aMarkov_tpLengths$total_conversions / aMarkov_tpLengths$conversion_count * 100
+
+aMarkov_tpLengths$Length <- factor(aMarkov_tpLengths$Length,
+                                   levels = c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long"))
+
+rm(aMarkov_lon, aMarkov_med, aMarkov_sho, aMarkov_sin, aMarkov_tin, aMarkov_vlo, markov_array_lengths)
+```
+Combine
+```{r more combine}
+model4.3.2a <- left_join(aHeuristic_tpLengths, aMarkov_tpLengths, by = c("channel_name", "Length", "conversion_count", "all_conversions"))
+
+model4.3.2a <- model4.3.2a %>%
+  select(-first_touch, -last_touch, -linear_touch, -all_conversions, -total_conversions)
+  
+new_names <- c("Channel", "Length", "Group Conversion Total",
+               "first_touch", "last_touch", "linear_touch", "markov_touch")
+
+names(model4.3.2a) <- new_names
+
+```
+
+## 4.3.2b Path Collapse
+
+### Heuristic Models
+```{r heuristic, message=FALSE, echo=FALSE}
+cHeuristic <- heuristic_models(Data = DataC,
+                 var_path = "path_col",
+                 var_conv = "conversion",
+                 sep =">")
+
+# First-Touch Attribution
+cHeuristic$first_touch <- cHeuristic$first_touch / total_conversions * 100
+
+# Last-Touch Attribution
+cHeuristic$last_touch <- cHeuristic$last_touch / total_conversions * 100
+
+# Linear Attribution
+cHeuristic$linear_touch <- cHeuristic$linear_touch / total_conversions * 100
+```
+
+### Data-Driven Models
+
+Logistic Regression
+```{r regression, message=FALSE, echo=FALSE}
+Data_Log <- DataC %>%
+  select(-first_touchpoint,
+         -last_touchpoint,
+         -time_till_session_end,
+         -customer_conversion_count,
+         -customer_journey_count,
+         -customer_conversion_rate,
+         -null_conversion,
+         -returning,
+         -touchpoint_length)
+
+cLog <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY,
+                 data = DataC,
+                 family = binomial(link = "logit"))
+summary(cLog)
+
+# Significant channels: Search, Organic, Instagram, Facebook, Email
+
+coefficient_names <- c("Intercept", "Display", "Seach",
+                       "Organic", "Instagram", "Facebook",
+                       "Direct", "Email", "Youtube")
+
+coefficient_names_abv <- c("B0", "GD", "GS", "FO", "MI", "MF", "FD", "FE", "GY")
+
+significant <- c(1, 0, 1, 1, 1 ,1, 0, 1, 0)
+
+cLog_coefficients <- data.frame(name = coefficient_names,
+                                name_abv = coefficient_names_abv,
+                                coefficient = cLog$coefficients, 
+                                significant)
+
+cLog_coefficients <- cLog_coefficients[-1, ] # Removes Intercept Row
+
+# Insignificant channels do not have coefficient = 0 [Display, Direct, Youtube]
+cLog_coefficients$coefficient[cLog_coefficients$significant == 0] <- 0 
+
+# Breakdown of math
+
+B_0 = 0.391663 # Intercept coefficient
+
+# x = B_0 + B_Ck
+# p_ij_hat == path channel count * (1 + exp(-x))^(-1)
+Data_Log$GD <- Data_Log$GD * (1 + exp(-(B_0 + cLog_coefficients$coefficient[1])))^(-1)
+
+Data_Log$GS <- Data_Log$GS * (1 + exp(-(B_0 + cLog_coefficients$coefficient[2])))^(-1)
+
+Data_Log$FO <- Data_Log$FO * (1 + exp(-(B_0 + cLog_coefficients$coefficient[3])))^(-1)
+
+Data_Log$MI <- Data_Log$MI * (1 + exp(-(B_0 + cLog_coefficients$coefficient[4])))^(-1)
+
+Data_Log$MF <- Data_Log$MF * (1 + exp(-(B_0 + cLog_coefficients$coefficient[5])))^(-1)
+
+Data_Log$FD <- Data_Log$FD * (1 + exp(-(B_0 + cLog_coefficients$coefficient[6])))^(-1)
+
+Data_Log$FE <- Data_Log$FE * (1 + exp(-(B_0 + cLog_coefficients$coefficient[7])))^(-1)
+
+Data_Log$GY <- Data_Log$GY * (1 + exp(-(B_0 + cLog_coefficients$coefficient[8])))^(-1)
+
+Data_Log <- Data_Log %>%
+  mutate(attribution_sum = rowSums(.[6:13]))
+
+# a_ij_hat == p_ij_hat / SUM(p_ir_hat) * y_i [= 1 or 0]
+Data_Log$GD <- Data_Log$GD / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$GS <- Data_Log$GS / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$FO <- Data_Log$FO / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$MI <- Data_Log$MI / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$MF <- Data_Log$MF / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$FD <- Data_Log$FD / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$FE <- Data_Log$FE / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$GY <- Data_Log$GY / Data_Log$attribution_sum * Data_Log$conversion
+
+logreg_count <- colSums(Data_Log[,6:13])
+logreg_touch <- logreg_count / sum(logreg_count) * 100
+show(logreg_touch)
+```
+
+First-order Markov Chain
+
+```{r markov, message=FALSE, echo=FALSE}
+markov_array <- markov_model(DataC,
+                        var_path = 'path_col',
+                        var_conv = 'conversion',
+                        var_null = 'null_conversion',
+                        out_more = TRUE)
+
+cMarkov <- markov_array$result
+cMarkov$all_conversions <- total_conversions
+cMarkov$rate <- cMarkov$total_conversions / cMarkov$all_conversions * 100
+
+cModel <- cbind(cHeuristic, cMarkov$rate)
+
+cModel <- cModel %>%
+  rename(markov_touch = `cMarkov$rate`)
+
+cTrans <- markov_array$transition_matrix
+
+cTrans$transition_probability <- cTrans$transition_probability * 100
+```
+
+Combine
+
+```{r model results, message=FALSE, echo=FALSE}
+ModelRates <- cbind(cModel, logreg_touch)
+print(ModelRates)
+
+ModelRates <- ModelRates %>%
+  mutate(channel_name = fct_recode(channel_name,
+                              "Google Display" = "GD",
+                              "Google Search" = "GS",
+                              "Organic" = "FO",
+                              "Direct" = "FD",
+                              "Youtube" = "GY",
+                              "Instagram" = "MI",
+                              "Facebook" = "MF",
+                              "Email Marketing" = "FE"))
+
+model4.3.2b <- cbind(ModelRates[1], stack(ModelRates[2:6]))
+print(model4.3.2b)
+
+rm(ModelRates, cHeuristic, cMarkov, cLog_coefficients, markov_array, logreg_count,
+   logreg_touch, Data_Log, cModel)
+```
+
+## 4.3.3 Path Granulate
+
+### Heuristic Models
+
+```{r heuristic, message=FALSE, echo=FALSE}
+gHeuristic <- heuristic_models(Data = DataG,
+                 var_path = "path_gran",
+                 var_conv = "conversion",
+                 sep =">")
+
+# First-Touch Attribution
+gHeuristic$first_touch <- gHeuristic$first_touch / total_conversions * 100
+
+# Last-Touch Attribution
+gHeuristic$last_touch <- gHeuristic$last_touch / total_conversions * 100
+
+# Linear Attribution
+gHeuristic$linear_touch <- gHeuristic$linear_touch / total_conversions * 100
+```
+
+### Data-Driven Models
+
+Logistic Regression
+
+```{r regression, message=FALSE, echo=FALSE}
+Data_Log <- DataG %>%
+  select(-first_touchpoint,
+         -last_touchpoint,
+         -time_till_session_end,
+         -customer_conversion_count,
+         -customer_journey_count,
+         -customer_conversion_rate,
+         -null_conversion,
+         -returning,
+         -touchpoint_length)
+
+gLog <- glm(conversion ~ Free + Ggle + Meta,
+                 data = DataG,
+                 family = binomial(link = "logit"))
+summary(gLog)
+
+# Significant channels: Search, Organic, Instagram, Facebook, Email
+
+coefficient_names <- c("Intercept", "Free", "Google", "Meta")
+
+coefficient_names_abv <- c("B__0", "Free", "Ggle", "Meta")
+
+significant <- c(1, 1, 1, 1)
+
+gLog_coefficients <- data.frame(name = coefficient_names,
+                                name_abv = coefficient_names_abv,
+                                coefficient = gLog$coefficients, 
+                                significant)
+
+gLog_coefficients <- gLog_coefficients[-1, ] # Removes Intercept Row
+
+# Insignificant channels do not have coefficient = 0 [Display, Direct, Youtube]
+gLog_coefficients$coefficient[gLog_coefficients$significant == 0] <- 0 
+
+# Breakdown of math
+
+B_0 = 0.390416 # Intercept coefficient
+
+# x = B_0 + B_Ck
+# p_ij_hat == path channel count * (1 + exp(-x))^(-1)
+Data_Log$Free <- Data_Log$Free * (1 + exp(-(B_0 + gLog_coefficients$coefficient[1])))^(-1)
+
+Data_Log$Ggle <- Data_Log$Ggle * (1 + exp(-(B_0 + gLog_coefficients$coefficient[2])))^(-1)
+
+Data_Log$Meta <- Data_Log$Meta * (1 + exp(-(B_0 + gLog_coefficients$coefficient[3])))^(-1)
+
+Data_Log <- Data_Log %>%
+  mutate(attribution_sum = rowSums(.[6:8]))
+
+# a_ij_hat == p_ij_hat / SUM(p_ir_hat) * y_i [= 1 or 0]
+Data_Log$Free <- Data_Log$Free / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$Ggle <- Data_Log$Ggle / Data_Log$attribution_sum * Data_Log$conversion
+
+Data_Log$Meta <- Data_Log$Meta / Data_Log$attribution_sum * Data_Log$conversion
+
+logreg_count <- colSums(Data_Log[,6:8])
+logreg_touch <- logreg_count / sum(logreg_count) * 100
+show(logreg_touch)
+```
+
+First-order Markov Chain
+
+```{r markov, message=FALSE, echo=FALSE}
+markov_array <- markov_model(DataG,
+                        var_path = 'path_gran',
+                        var_conv = 'conversion',
+                        var_null = 'null_conversion',
+                        out_more = TRUE)
+
+gMarkov <- markov_array$result
+gMarkov$all_conversions <- total_conversions
+gMarkov$rate <- gMarkov$total_conversions / gMarkov$all_conversions * 100
+
+gModel <- cbind(gHeuristic, gMarkov$rate)
+
+gModel <- gModel %>%
+  rename(markov_touch = `gMarkov$rate`)
+
+gTrans <- markov_array$transition_matrix
+
+gTrans$transition_probability <- gTrans$transition_probability * 100
+```
+
+Combine
+
+```{r model results, message=FALSE, echo=FALSE}
+ModelRates <- cbind(gModel, logreg_touch)
+print(ModelRates)
+
+ModelRates <- ModelRates %>%
+  mutate(channel_name = fct_recode(channel_name,
+                              "Free" = "Free",
+                              "Google" = "Ggle",
+                              "Meta" = "Meta"))
+
+model4.3.3 <- cbind(ModelRates[1], stack(ModelRates[2:6]))
+head(model4.3.3)
+
+rm(ModelRates, gHeuristic, gMarkov, gLog_coefficients, markov_array, logreg_count,
+   logreg_touch, Data_Log, gModel)
+```
+
+# MODELLING
+
+## 4.3.1
+```{r plot1 matrix, echo = F}
+aTrans <- aTrans %>%
+  mutate(channel_from = fct_recode(channel_from,
+                                   "Google Display" = "1",
+                                   "Google Search" = "2",
+                                   "Organic" = "3",
+                                   "Instagram" = "4",
+                                   "Facebook" = "5",
+                                   "Display" = "6",
+                                   "Email" = "7",
+                                   "Youtube" = "8"),
+         channel_to = fct_recode(channel_to,
+                                 "Google Display" = "1",
+                                 "Google Search" = "2",
+                                 "Organic" = "3",
+                                 "Instagram" = "4",
+                                 "Facebook" = "5",
+                                 "Display" = "6",
+                                 "Email" = "7",
+                                 "Youtube" = "8"))
+
+cols <- c("#e7f0fa", "#c9e2f6", "#95cbee", "#0099dc", "#4ab04a", "#ffd73e", "#eec73a",
+          "#e29421", "#e29421", "#f05336", "#ce472e")
+t <- max(aTrans$transition_probability)
+
+ggplot(aTrans, aes(y = channel_from, x = channel_to, fill = transition_probability)) +
+  theme_minimal() +
+  geom_tile(colour = "white", width = .9, height = .9) +
+  scale_fill_gradientn(colours = cols, limits = c(0, t),
+                       breaks = seq(0, t, by = t/4),
+                       labels = c("0", round(t/4*1, 2), round(t/4*2, 2), round(t/4*3, 2), round(t/4*4, 2)),
+                       guide = guide_colourbar(ticks = T, nbin = 50, barheight = .5, label = T, barwidth = 10)) +
+  geom_text(aes(label = round(transition_probability, 2)), fontface = "bold", size = 4) +
+  theme(legend.position = 'bottom',
+        legend.direction = "horizontal",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(size = 20, face = "bold", vjust = 2, color = 'black', lineheight = 0.8),
+        axis.title.x = element_text(size = 24, face = "bold"),
+        axis.title.y = element_text(size = 24, face = "bold"),
+        axis.text.y = element_text(size = 8, face = "bold", color = 'black'),
+        axis.text.x = element_text(size = 8, angle = 90, hjust = 0.5, vjust = 0.5, face = "plain")) +
+  ggtitle("Transition matrix heatmap")
+```
+
+
+```{r plot1, echo = F}
+# Channel Credit Comparison - Heuristic Models
+p1 <- model4.3.1 %>%
+  filter(ind != "markov_touch") %>%
+  filter(ind != "logreg_touch") %>%
+  ggplot(aes(x = ind, y = values, colour = ind)) +
+  geom_point(size = 3) +
+  theme(axis.ticks.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.title.x=element_blank()) +
+  facet_wrap( ~channel_name, scales = "free_y") +
+  labs(y = "Attribution Credit (%)",
+       y = element_blank(),
+       title = "Channel Attribution Model Comparison - Heuristic Models",
+       colour = "Model") +
+  scale_color_manual(values = paletteer::paletteer_d("MoMAColors::Abbott")[c(1,2,3)],
+                     labels = c("first_touch" = "First Touch Full Credit",
+                                "last_touch" = "Last Touch Full Credit",
+                                "linear_touch" = "Linear"))
+
+p1 + ggh4x::facetted_pos_scales(y = list(
+  channel_name == "Direct" ~ scale_y_continuous(limits = c(9,13)),
+  channel_name == "Email Marketing" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Organic" ~ scale_y_continuous(limits = c(28,32)),
+  channel_name == "Google Display" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Google Search" ~ scale_y_continuous(limits = c(19,23)),
+  channel_name == "Youtube" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Facebook" ~ scale_y_continuous(limits = c(14,18)),
+  channel_name == "Instagram" ~ scale_y_continuous(limits = c(4,8))
+  ))
+
+# Channel Credit Comparison - Heuristic vs Data-Driven
+p2 <- model4.3.1 %>%
+  filter(ind != "first_touch") %>%
+  filter(ind != "last_touch") %>%
+  ggplot(aes(x = ind, y = values, colour = ind)) +
+  geom_point(size = 3) +
+  theme(axis.ticks.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.title.x=element_blank()) +
+  facet_wrap( ~channel_name, scales = "free_y") +
+  labs(y = "Attribution Credit (%)",
+       y = element_blank(),
+       title = "Channel Attribution Model Comparison - Linear vs Data-Driven",
+       colour = "Model") +
+  scale_color_manual(values = paletteer::paletteer_d("MoMAColors::Abbott")[c(3,4,5)],
+                          labels = c("linear_touch" = "Linear",
+                                     "markov_touch" = "First-order Markov",
+                                     "logreg_touch" = "Logistic Regression"))
+
+p2 + ggh4x::facetted_pos_scales(y = list(
+  channel_name == "Direct" ~ scale_y_continuous(limits = c(9,13)),
+  channel_name == "Email Marketing" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Organic" ~ scale_y_continuous(limits = c(28,32)),
+  channel_name == "Google Display" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Google Search" ~ scale_y_continuous(limits = c(19,23)),
+  channel_name == "Youtube" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Facebook" ~ scale_y_continuous(limits = c(14,18)),
+  channel_name == "Instagram" ~ scale_y_continuous(limits = c(4,8))
+  ))
+```
+## 4.3.2a
+```{r graph}
+# MODELS
+aMarkov_tpLengths <- aMarkov_tpLengths %>%
+  mutate(channel_name = fct_recode(channel_name,
+                              "Google Display" = "GD",
+                              "Google Search" = "GS",
+                              "Organic" = "FO",
+                              "Direct" = "FD",
+                              "Youtube" = "GY",
+                              "Instagram" = "MI",
+                              "Facebook" = "MF",
+                              "Email Marketing" = "FE"))
+
+# 1
+channel_order <- aMarkov_tpLengths %>%
+  group_by(channel_name) %>%
+  summarise(total_credit = sum(rate), .groups = "drop") %>%
+  arrange(desc(total_credit)) %>%
+  pull(channel_name)
+
+channel_colors <- setNames(
+  as.character(paletteer::paletteer_d("MoMAColors::Abbott"))[
+    seq_along(channel_order)
+  ],
+  channel_order
+)
+
+aMarkov_tpLengths %>%
+  ggplot(aes(
+    y = rate,
+    x = reorder(Length, rate),
+    fill = factor(channel_name, levels = channel_order)
+  )) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = channel_colors) +
+  labs(
+    title = "First-Order Markov Attribution of Channel Credit over Grouped Journey Lengths",
+    y = "Credit (%)",
+    x = "Journey Length Group",
+    fill = "Channel"
+  )
+
+# 2
+aMarkov_tpLengths %>%
+  ggplot(aes(
+    y = total_conversions,
+    x = reorder(Length, total_conversions),
+    fill = factor(channel_name, levels = channel_order)
+  )) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = channel_colors) +
+  labs(
+    title = "Conversion Counts within Grouped Journey Lengths",
+    y = "Conversion Count",
+    x = "Journey Length Group",
+    fill = "Channel"
+  )
+
+```
+
+## 4.3.2b
+```{r plot1, echo = F}
+modelCompare <- left_join(model4.3.1, model4.3.2b, by = c("channel_name", "ind"))
+
+# Channel Credit Comparison - Standard vs Collapsed
+p2 <- modelCompare %>%
+  filter(ind != "first_touch") %>%
+  filter(ind != "last_touch") %>%
+  ggplot(aes(x = ind, colour = ind)) +
+  geom_point(aes(y = values.x, alpha = "values.x"), size = 3) +
+  geom_point(aes(y = values.y, alpha = "values.y"), size = 3) +
+  theme(axis.ticks.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.title.x=element_blank()) +
+  facet_wrap( ~channel_name, scales = "free_y") +
+  labs(y = "Attribution Credit (%)",
+       y = element_blank(),
+       title = "Channel Attribution Path Size Comparison",
+       colour = "Model") +
+  scale_color_manual(values = paletteer::paletteer_d("MoMAColors::Abbott")[c(3,4,5)],
+                          labels = c("linear_touch" = "Linear",
+                                     "markov_touch" = "First-order Markov",
+                                     "logreg_touch" = "Logistic Regression")) +
+  scale_alpha_manual(
+  name = "Path Size", values = c("values.x" = 0.5, "values.y" = 1),
+  labels = c("values.x" = "Initial", "values.y" = "Collapsed"))
+
+p2 + ggh4x::facetted_pos_scales(y = list(
+  channel_name == "Direct" ~ scale_y_continuous(limits = c(9,13)),
+  channel_name == "Email Marketing" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Organic" ~ scale_y_continuous(limits = c(28,32)),
+  channel_name == "Google Display" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Google Search" ~ scale_y_continuous(limits = c(19,23)),
+  channel_name == "Youtube" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Facebook" ~ scale_y_continuous(limits = c(14,18)),
+  channel_name == "Instagram" ~ scale_y_continuous(limits = c(4,8))
+  ))
+```
+
+## 4.3.3
+```{r plot1, echo = F}
+modelCompare <- left_join(model4.3.1, model4.3.2b, by = c("channel_name", "ind"))
+
+# Channel Credit Comparison - Standard vs Collapsed
+p2 <- modelCompare %>%
+  filter(ind != "first_touch") %>%
+  filter(ind != "last_touch") %>%
+  ggplot(aes(x = ind, colour = ind)) +
+  geom_point(aes(y = values.x, alpha = "values.x"), size = 3) +
+  geom_point(aes(y = values.y, alpha = "values.y"), size = 3) +
+  theme(axis.ticks.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.title.x=element_blank()) +
+  facet_wrap( ~channel_name, scales = "free_y") +
+  labs(y = "Attribution Credit (%)",
+       y = element_blank(),
+       title = "Channel Attribution Path Size Comparison",
+       colour = "Model") +
+  scale_color_manual(values = paletteer::paletteer_d("MoMAColors::Abbott")[c(3,4,5)],
+                          labels = c("linear_touch" = "Linear",
+                                     "markov_touch" = "First-order Markov",
+                                     "logreg_touch" = "Logistic Regression")) +
+  scale_alpha_manual(
+  name = "Path Size", values = c("values.x" = 0.5, "values.y" = 1),
+  labels = c("values.x" = "Initial", "values.y" = "Collapsed"))
+
+p2 + ggh4x::facetted_pos_scales(y = list(
+  channel_name == "Direct" ~ scale_y_continuous(limits = c(9,13)),
+  channel_name == "Email Marketing" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Organic" ~ scale_y_continuous(limits = c(28,32)),
+  channel_name == "Google Display" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Google Search" ~ scale_y_continuous(limits = c(19,23)),
+  channel_name == "Youtube" ~ scale_y_continuous(limits = c(4,8)),
+  channel_name == "Facebook" ~ scale_y_continuous(limits = c(14,18)),
+  channel_name == "Instagram" ~ scale_y_continuous(limits = c(4,8))
+  ))
+```
+
+# Analysis
+
+# Discussion
