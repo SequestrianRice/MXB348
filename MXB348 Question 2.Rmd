@@ -36,16 +36,6 @@ library(expm)
 ```
 
 ```{r}
-head(customer_journey)
-head(results)
-str(customer_journey)
-str(results)
-summary(customer_journey)
-summary(results)
-# Displays a brief summary
-```
-
-```{r}
 journeys <- customer_journey %>%
   left_join(
     results,
@@ -57,70 +47,14 @@ journeys <- journeys %>%
     session_id,
     order
   )
-```
-
-
-```{r}
-set.seed(348)
-
 journeys <- journeys %>%
   group_by(user_id) %>%
   filter(runif(1) < 0.8) %>%
   ungroup()
-### Concatenation and rearrangement of both files to have a complete 
-### understanding of a users session
-### Note, the use of the sequential operator over another pipeline 
 ```
 
 ```{r}
-#  Opens viewing portal
-nrow(customer_journey)
-nrow(journeys)
-# Debugging point, ensures equivalent dimensions
-```
-```{r}
-### Question 2
-###
-### R has a built in matrix solver, we are looking to solve the expected value
-### /expected number of steps until we reach an absorbing state/conversion.
-###
-```
-
-
-```{r}
-### Creation of the Absorbing Finite Markov Chain
-### Priors
-### I = 1x9
-### MRn = 9x9
-### We are also sticking to first order Markov Chains for a single primary 
-### purpose. 
-### That being the possibility of over fitting our data. The primary goal of 
-### statistics is to use finite data to create a model that can infer valuable
-### information from the population. By using a higher order Markov chain that
-### uses information before the single previous transition. There is a risk that
-### we begin creating a model that is not only more computationally demanding.
-### But is also primed to be able to predict our specific data set a lot better.
-### This is despite the proprietary use of training data. Because although we
-### can randomize the training data to test our model. At the end of the day we
-### want a model that does the job of predicting real events not just 
-### events constructed by the training data. This requires a model that powerfully
-### predicts our currently available information, but also allows for a flexible 
-### enough model to allow for exceptions.
-```
-
-```{r}
-
-### Journey Filtration
-train_conversion = journeys %>%
-  filter(conversion == 1)
-### From here, we will begin estimating P(Xt+1 = j|Xt = i, eventual conversion)
-### Whilst Model 1 addresses conversion propensity 
-### Model 2 addresses the expected remaining journey length conditional upon
-### conversion occurring.
-```
-
-```{r}
-### State Space Concatenation
+# Transition Calculations
 channel_states <- c(
   "Direct",
   "Email Marketing",
@@ -136,10 +70,10 @@ states <- c(
   channel_states,
   "Conversion"
 )
-```
 
-```{r}
-### Transition Element Calculations
+train_conversion = journeys %>%
+  filter(conversion == 1)
+
 train_transitions <- train_conversion %>%
   group_by(
     user_id,
@@ -160,9 +94,6 @@ train_transitions <- train_conversion %>%
     )
   ) %>%
   ungroup()
-```
-
-```{r}
 transition_counts <- train_transitions %>%
   count(
     channel,
@@ -176,7 +107,6 @@ transition_probs <- transition_counts %>%
   ) %>%
   ungroup()
 ```
-
 ```{r}
 P <- matrix(
   0,
@@ -189,10 +119,10 @@ P <- matrix(
 )
 
 for (i in seq_len(nrow(transition_probs))) {
-
+  
   from <- transition_probs$channel[i]
   to   <- transition_probs$next_state[i]
-
+  
   P[from, to] <-
     transition_probs$probability[i]
 }
@@ -226,19 +156,8 @@ customer_mc <- new(
 
 customer_mc
 ```
+
 ```{r}
-############################################################
-# 4.1 - Expected Number of Steps
-############################################################
-###
-### N = (I-Q)^-1
-### 
-### N = Fundamental matrix. Its entries give the expected number of visits
-### to transient state j, starting from transient state i, before absorption.
-### I = Identity matrix
-### Q = Transient to transient transition matrix. Its the part of the full 
-### transition matrix P containing probabilities of moving between transient 
-### states. 
 Q <- P[
   channel_states,
   channel_states
@@ -265,342 +184,165 @@ expected_steps <- as.numeric(
 names(expected_steps) <-
   rownames(Q)
 
-expected_steps
-```
-
-```{r}
-### Converts Results into Useful Display
 expected_steps_table <-
   tibble(
     channel =
       names(expected_steps),
-
+    
     expected_steps_to_conversion =
       expected_steps
   ) %>%
   arrange(
     expected_steps_to_conversion
   )
-
-expected_steps_table
 ```
 
 ```{r}
-############################################################
-# 4.2 - Customer Lifecycle Stages
-############################################################
-###
-### Determine life cycle cutoffs using TRAINING information
-### only to avoid information leakage.
-stage_cutoffs <- quantile(
-  expected_steps,
-  probs = c(
-    1 / 3,
-    2 / 3
-  ),
-  na.rm = TRUE
-)
+### Stage 1 = Life cycle Classifications
 
-stage_cutoffs
-### Deriving cutoffs from the training data. Where we divide the distribution
-### of predicted remaining steps into thirds.
+# Define lifecycle boundaries
+cutoffs <- quantile(expected_steps, c(1/3, 2/3))
+
+# Classify marketing channels
+channel_lifecycle <- tibble(
+  channel = names(expected_steps),
+  expected_steps = as.numeric(expected_steps)
+) %>%
+  mutate(stage = case_when(
+    expected_steps <= cutoffs[1] ~ "Late",
+    expected_steps <= cutoffs[2] ~ "Mid",
+    TRUE ~ "Early"
+  )) %>%
+  arrange(expected_steps)
+
+print(channel_lifecycle)
 ```
-
-
 ```{r}
-### Assigning Channels to Each Lifestyle Stage
-channel_lifecycle <-
-  expected_steps_table %>%
+### Stage 2 = Customer Classifications
+
+# Identify each customer's latest recorded state
+current_customers <- journeys %>%
+  arrange(user_id, desc(session_id), desc(order)) %>%
+  distinct(user_id, .keep_all = TRUE) %>%
+  left_join(
+    select(channel_lifecycle, channel, stage),
+    by = "channel"
+  ) %>%
   mutate(
-    lifecycle_stage =
-      case_when(
-
-        expected_steps_to_conversion <=
-          stage_cutoffs[1] ~
-          "Late",
-
-        expected_steps_to_conversion <=
-          stage_cutoffs[2] ~
-          "Mid",
-
-        TRUE ~
-          "Early"
-      )
+    stage = if_else(conversion == 1, "Converted", stage),
+    stage = factor(stage, levels = c("Early", "Mid", "Late", "Converted"))
   )
 
-View(channel_lifecycle)
-### The point here being, we are making numerically driven categorizations. 
-### Here, we can see that higher expected steps to conversion channels are 
-### categorized as "early" stage life cycles. The reason for this is because 
-### channels with a higher expected value have more steps remaining before 
-### conversion and therefore a customer in that channel is presumably in an 
-### earlier stage of their journey.
+# Summarise customer distribution
+lifecycle_summary <- current_customers %>%
+  count(stage, .drop = FALSE) %>%
+  mutate(percentage = 100 * n / sum(n))
+
+print(lifecycle_summary)
 ```
-
-
 ```{r}
-### Creates the "current_customer_state" object which is the user's most
-### recent journey record.
-### Furthermore, we're now adding the expected number of remaining steps 
-### for each user's current channel. 
-current_customer_state <-
-  journeys %>%
-  group_by(user_id) %>%
-  arrange(
-    desc(session_id),
-    desc(order),
-    .by_group = TRUE
-  ) %>%
-  slice(1) %>%
+ggplot(lifecycle_summary, aes(stage, percentage, fill = stage)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = paste0(round(percentage, 1), "%")),
+            vjust = -0.4) +
+  labs(
+    title = "Customer Lifecycle Distribution",
+    x = "Lifecycle Stage",
+    y = "Percentage of Customers"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+```{r}
+# Calculate observed remaining steps within converting sessions
+lifecycle_validation <- journeys %>%
+  filter(conversion == 1) %>%
+  group_by(user_id, session_id) %>%
+  arrange(order, .by_group = TRUE) %>%
+  mutate(actual_steps = n() - row_number() + 1) %>%
   ungroup() %>%
-  mutate(
-    predicted_steps =
-      expected_steps[channel],
-    lifecycle_stage =
-      case_when(
-
-        conversion == 1 ~
-          "Converted",
-
-        predicted_steps <=
-          stage_cutoffs[1] ~
-          "Late",
-
-        predicted_steps <=
-          stage_cutoffs[2] ~
-          "Mid",
-
-        TRUE ~
-          "Early"
-      ),
-    
-    lifecycle_stage =
-      factor(
-        lifecycle_stage,
-        levels = c(
-          "Converted",
-          "Late",
-          "Mid",
-          "Early"
-        )
-      )
-  )
-View(current_customer_state)
-    
-### From here, we just labelled each user as one of the four life cycle stages
-### based on conversion and predicted steps
-View(current_customer_state)
-```
-
-
-```{r}
-lifecycle_summary <-
-  current_customer_state %>%
-  count(
-    lifecycle_stage,
-    .drop = FALSE
+  left_join(
+    select(channel_lifecycle, channel, expected_steps, stage),
+    by = "channel"
   ) %>%
-  mutate(
-    proportion =
-      n / sum(n)
-  )
+  mutate(stage = factor(stage, levels = c("Late", "Mid", "Early"))) %>%
+  filter(!is.na(stage))
 
-View(lifecycle_summary)
-### I believe this is the point where we need to really understand what the 
-### summary table represents and how we want to further interpret this 
-### information.
-```
-
-
-```{r}
-###
-# ----------------------------------------------------------
-# Observed remaining journey length by lifecycle stage
-# ----------------------------------------------------------
-lifecycle_validation <-
-  journeys %>%
-  arrange(
-    user_id,
-    session_id,
-    order
-  ) %>%
-  group_by(user_id) %>%
-  mutate(
-
-    journey_position =
-      row_number(),
-
-    next_conversion_position =
-      vapply(
-        journey_position,
-        function(i) {
-
-          future_conversions <-
-            journey_position[
-              journey_position >= i &
-                conversion == 1
-            ]
-
-          if (length(future_conversions) == 0) {
-
-            NA_integer_
-
-          } else {
-
-            min(future_conversions)
-
-          }
-        },
-        integer(1)
-      ),
-
-    actual_steps_remaining =
-      next_conversion_position -
-      journey_position
-  ) %>%
-  ungroup() %>%
-
-  # Only observations for which a subsequent conversion is
-  # actually observed can be used to validate remaining
-  # journey length.
-  filter(
-    !is.na(actual_steps_remaining)
-  ) %>%
-
-  mutate(
-
-    # Assign predicted remaining steps using the expected
-    # steps estimated from the training transition model.
-    predicted_steps =
-      expected_steps[channel],
-
-    # Apply exactly the same training-derived lifecycle
-    # cutoffs used above.
-    lifecycle_stage =
-      case_when(
-
-        predicted_steps <=
-          stage_cutoffs[1] ~
-          "Late",
-
-        predicted_steps <=
-          stage_cutoffs[2] ~
-          "Mid",
-
-        TRUE ~
-          "Early"
-      ),
-
-    lifecycle_stage =
-      factor(
-        lifecycle_stage,
-        levels = c(
-          "Late",
-          "Mid",
-          "Early"
-        )
-      )
-  ) %>%
-
-  # Remove observations where a channel could not be mapped
-  # to an expected-step estimate.
-  filter(
-    !is.na(predicted_steps),
-    !is.na(lifecycle_stage)
-  ) %>%
-
-  # Temporary variables used to calculate actual remaining
-  # steps are no longer required.
-  select(
-    -journey_position,
-    -next_conversion_position
-  )
-
-View(lifecycle_validation)
-```
-
-```{r}
-stage_validation_summary <-
-  lifecycle_validation %>%
-  group_by(
-    lifecycle_stage
-  ) %>%
+# Summarise observed journey lengths
+validation_summary <- lifecycle_validation %>%
+  group_by(stage) %>%
   summarise(
-
-    n =
-      n(),
-
-    mean_actual_steps =
-      mean(
-        actual_steps_remaining,
-        na.rm = TRUE
-      ),
-
-    median_actual_steps =
-      median(
-        actual_steps_remaining,
-        na.rm = TRUE
-      ),
-
-    sd_actual_steps =
-      sd(
-        actual_steps_remaining,
-        na.rm = TRUE
-      ),
-
+    n = n(),
+    mean_steps = mean(actual_steps),
+    median_steps = median(actual_steps),
     .groups = "drop"
   )
 
-View(stage_validation_summary)
+print(validation_summary)
+```
+```{r}
+ggplot(lifecycle_validation,
+       aes(stage, actual_steps, fill = stage)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  labs(
+    title = "Actual Remaining Steps by Lifecycle Stage",
+    x = "Predicted Lifecycle Stage",
+    y = "Actual Steps Until Conversion"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
 ```
 
-
 ```{r}
-### E[T|Late] < E[T|Mid] < E[T|Early]
-# ----------------------------------------------------------
-# Formal test of differences
-# ----------------------------------------------------------
-
-stage_anova <- aov(
-  actual_steps_remaining ~
-    lifecycle_stage,
-  data =
-    lifecycle_validation
-)
+stage_anova <- aov(actual_steps ~ stage, data = lifecycle_validation)
 
 summary(stage_anova)
-
-# ----------------------------------------------------------
-# Visual validation
-# ----------------------------------------------------------
 ```
-
-
 ```{r}
-ggplot(
-  lifecycle_validation,
-  aes(
-    x = lifecycle_stage,
-    y = actual_steps_remaining
-  )
-) +
-  geom_boxplot() +
-  labs(
-    title =
-      "Actual Remaining Journey Length by Lifecycle Stage",
-
-    x =
-      "Predicted Customer Lifecycle Stage",
-
-    y =
-      "Actual Steps Remaining Until Conversion"
+ggplot(channel_lifecycle,
+       aes(x = reorder(channel, expected_steps),
+           y = expected_steps,
+           fill = stage)) +
+  
+  geom_col(width = 0.7) +
+  
+  geom_text(aes(label = round(expected_steps, 4)),
+            hjust = -0.15, size = 3.5) +
+  
+  coord_flip() +
+  
+  scale_y_continuous(
+    limits = c(0, max(channel_lifecycle$expected_steps) * 1.08)
   ) +
-  theme_minimal()
+  
+  scale_fill_manual(
+    values = c(
+      "Early" = "#E76F51",
+      "Mid"   = "#E9C46A",
+      "Late"  = "#2A9D8F"
+    ),
+    breaks = c("Early", "Mid", "Late")
+  ) +
+  
+  labs(
+    title = "Expected Steps to Conversion by Marketing Channel",
+    subtitle = "Channels classified by predicted customer lifecycle stage",
+    x = "Marketing Channel",
+    y = "Expected Remaining Steps",
+    fill = "Lifecycle Stage"
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    panel.grid.major.y = element_blank()
+  )
 ```
 
 
-```{r}
-```
 
 
 
