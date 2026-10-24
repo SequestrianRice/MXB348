@@ -9,14 +9,6 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# 4.3 Overview
-
-# Literature Review
-
-## What is attribution modelling?
-
-## Heuristic vs Data-Driven
-
 # Initialisation
 
 ## Packages
@@ -32,6 +24,8 @@ library(RColorBrewer)
 library(patchwork)
 library(ggh4x)
 library(paletteer)
+library(pROC)
+library(ggtext)
 ```
 
 ## Load Data
@@ -252,13 +246,39 @@ rm(list = ls())
 DataA <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_full.csv")
 DataC <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_collapsed.csv")
 DataG <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_granulated.csv")
+```
+
+```{r Pareto A, message=FALSE, echo=FALSE}
+# 80:20 split -- 80% Training & 20% Testing
+  # All user sessions kept together.
+set.seed(99)
+users <- unique(DataA$user_id)
+n_train_users <- floor(0.80 * length(users))
+
+# Retry if the random split leaves the test set with only one outcome
+for (attempt in 1:1000) {
+  train_users <- sample(users, size = n_train_users)
+
+  train_rows <- DataA$user_id %in% train_users
+  test_rows  <- !train_rows
+
+  if (length(unique(DataA$conversion[test_rows])) == 2) {
+    break
+  }
+}
+
+if (length(unique(DataA$conversion[test_rows])) < 2) {
+  stop("Could not create a test set containing both conversions and non-conversions.")
+}
+
+DataA_train <- DataA[train_rows, ]
+DataA_test  <- DataA[test_rows, ]
 
 # VALUES
 # Conversion Count
-total_conversions <- sum(DataA$conversion == "1")
+total_conversions <- sum(DataA_train$conversion == "1")
 # Conversion Rate
-conversion_rate <- sum(DataA$conversion == "1") / length(DataA$conversion)
-
+conversion_rate <- sum(DataA_train$conversion == "1") / length(DataA_train$conversion)
 ```
 
 ## 4.3.1 Standard
@@ -266,7 +286,7 @@ conversion_rate <- sum(DataA$conversion == "1") / length(DataA$conversion)
 ### Heuristic Models
 
 ```{r heuristic, message=FALSE, echo=FALSE}
-aHeuristic <- heuristic_models(Data = DataA,
+aHeuristic <- heuristic_models(Data = DataA_train,
                  var_path = "path",
                  var_conv = "conversion",
                  sep =">")
@@ -286,7 +306,7 @@ aHeuristic$linear_touch <- aHeuristic$linear_touch / total_conversions * 100
 Logistic Regression
 
 ```{r regression, message=FALSE, echo=FALSE}
-Data_Log <- DataA %>%
+Data_Log <- DataA_train %>%
   select(-first_touchpoint,
          -last_touchpoint,
          -time_till_session_end,
@@ -298,7 +318,7 @@ Data_Log <- DataA %>%
          -touchpoint_length)
 
 aLog <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY,
-                 data = DataA,
+                 data = DataA_train,
                  family = binomial(link = "logit"))
 summary(aLog)
 
@@ -324,7 +344,7 @@ aLog_coefficients$coefficient[aLog_coefficients$significant == 0] <- 0
 
 # Breakdown of math
 
-B_0 = 0.392660 # Intercept coefficient
+B_0 = aLog$coefficients[1] # Intercept coefficient
 
 # x = B_0 + B_Ck
 # p_ij_hat == path channel count * (1 + exp(-x))^(-1)
@@ -373,7 +393,7 @@ show(logreg_touch)
 First-order Markov Chain
 
 ```{r markov, message=FALSE, echo=FALSE}
-markov_array <- markov_model(DataA,
+markov_array <- markov_model(DataA_train,
                         var_path = 'path',
                         var_conv = 'conversion',
                         var_null = 'null_conversion',
@@ -420,8 +440,9 @@ rm(ModelRates, aHeuristic, aMarkov, aLog_coefficients, markov_array, logreg_coun
 ## 4.3.2a Journey Group
 
 ### Heuristic Models
+
 ```{r bad, echo = F, message = F}
-touchpoint_groups <- DataA %>%
+touchpoint_groups <- DataA_train %>%
   filter(conversion == "1") %>%
   count(touchpoint_length, name = "conversion_count") %>%
   rename(Length = touchpoint_length)
@@ -430,7 +451,7 @@ lengths <- c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long")
 
 heuristic_array_lengths <- set_names(lengths) %>%
   map(\(category) {
-    DataA %>%
+    DataA_train %>%
       filter(touchpoint_length == category) %>%
       heuristic_models(
         var_path = "path",
@@ -473,19 +494,22 @@ rm(aHeuristic_lon, aHeuristic_med, aHeuristic_sho, aHeuristic_sin, aHeuristic_ti
 ### Data-Driven Models
 
 Logistic Regression
+
 ```{r regression, message=FALSE, echo=FALSE}
-DataA$touchpoint_length <- factor(DataA$touchpoint_length,
+DataA_train$touchpoint_length <- factor(DataA_train$touchpoint_length,
                                          ordered = FALSE)
 
 aLog_tpL <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY + 
                   relevel(touchpoint_length, ref = "Singular"),
-                 data = DataA,
+                 data = DataA_train,
                  family = binomial(link = "logit"))
 summary(aLog_tpL)
 ```
+
 First-order Markov Chain
+
 ```{r bad, echo = F, message = F}
-touchpoint_groups <- DataA %>%
+touchpoint_groups <- DataA_train %>%
   filter(conversion == "1") %>%
   count(touchpoint_length, name = "conversion_count") %>%
   rename(Length = touchpoint_length)
@@ -494,7 +518,7 @@ lengths <- c("Singular", "Tiny", "Short", "Medium", "Long", "Very Long")
 
 markov_array_lengths <- set_names(lengths) %>%
   map(\(category) {
-    DataA %>%
+    DataA_train %>%
       filter(touchpoint_length == category) %>%
       markov_model(
         var_path = "path",
@@ -532,7 +556,9 @@ aMarkov_tpLengths$Length <- factor(aMarkov_tpLengths$Length,
 
 rm(aMarkov_lon, aMarkov_med, aMarkov_sho, aMarkov_sin, aMarkov_tin, aMarkov_vlo, markov_array_lengths)
 ```
+
 Combine
+
 ```{r more combine}
 model4.3.2a <- left_join(aHeuristic_tpLengths, aMarkov_tpLengths, by = c("channel_name", "Length", "conversion_count", "all_conversions"))
 
@@ -548,9 +574,37 @@ names(model4.3.2a) <- new_names
 
 ## 4.3.2b Path Collapse
 
+```{r Pareto C, message=FALSE, echo=FALSE}
+# 80:20 split -- 80% Training & 20% Testing
+  # All user sessions kept together.
+set.seed(99)
+users <- unique(DataC$user_id)
+n_train_users <- floor(0.80 * length(users))
+
+# Retry if the random split leaves the test set with only one outcome
+for (attempt in 1:1000) {
+  train_users <- sample(users, size = n_train_users)
+
+  train_rows <- DataC$user_id %in% train_users
+  test_rows  <- !train_rows
+
+  if (length(unique(DataC$conversion[test_rows])) == 2) {
+    break
+  }
+}
+
+if (length(unique(DataC$conversion[test_rows])) < 2) {
+  stop("Could not create a test set containing both conversions and non-conversions.")
+}
+
+DataC_train <- DataC[train_rows, ]
+DataC_test  <- DataC[test_rows, ]
+```
+
 ### Heuristic Models
+
 ```{r heuristic, message=FALSE, echo=FALSE}
-cHeuristic <- heuristic_models(Data = DataC,
+cHeuristic <- heuristic_models(Data = DataC_train,
                  var_path = "path_col",
                  var_conv = "conversion",
                  sep =">")
@@ -568,8 +622,9 @@ cHeuristic$linear_touch <- cHeuristic$linear_touch / total_conversions * 100
 ### Data-Driven Models
 
 Logistic Regression
+
 ```{r regression, message=FALSE, echo=FALSE}
-Data_Log <- DataC %>%
+Data_Log <- DataC_train %>%
   select(-first_touchpoint,
          -last_touchpoint,
          -time_till_session_end,
@@ -581,7 +636,7 @@ Data_Log <- DataC %>%
          -touchpoint_length)
 
 cLog <- glm(conversion ~ GD + GS + FO + MI + MF + FD + FE + GY,
-                 data = DataC,
+                 data = DataC_train,
                  family = binomial(link = "logit"))
 summary(cLog)
 
@@ -607,7 +662,7 @@ cLog_coefficients$coefficient[cLog_coefficients$significant == 0] <- 0
 
 # Breakdown of math
 
-B_0 = 0.391663 # Intercept coefficient
+B_0 = cLog$coefficients[1] # Intercept coefficient
 
 # x = B_0 + B_Ck
 # p_ij_hat == path channel count * (1 + exp(-x))^(-1)
@@ -655,7 +710,7 @@ show(logreg_touch)
 First-order Markov Chain
 
 ```{r markov, message=FALSE, echo=FALSE}
-markov_array <- markov_model(DataC,
+markov_array <- markov_model(DataC_train,
                         var_path = 'path_col',
                         var_conv = 'conversion',
                         var_null = 'null_conversion',
@@ -701,10 +756,37 @@ rm(ModelRates, cHeuristic, cMarkov, cLog_coefficients, markov_array, logreg_coun
 
 ## 4.3.3 Path Granulate
 
+```{r Pareto G, message=FALSE, echo=FALSE}
+# 80:20 split -- 80% Training & 20% Testing
+  # All user sessions kept together.
+set.seed(99)
+users <- unique(DataG$user_id)
+n_train_users <- floor(0.80 * length(users))
+
+# Retry if the random split leaves the test set with only one outcome
+for (attempt in 1:1000) {
+  train_users <- sample(users, size = n_train_users)
+
+  train_rows <- DataG$user_id %in% train_users
+  test_rows  <- !train_rows
+
+  if (length(unique(DataG$conversion[test_rows])) == 2) {
+    break
+  }
+}
+
+if (length(unique(DataG$conversion[test_rows])) < 2) {
+  stop("Could not create a test set containing both conversions and non-conversions.")
+}
+
+DataG_train <- DataG[train_rows, ]
+DataG_test  <- DataG[test_rows, ]
+```
+
 ### Heuristic Models
 
 ```{r heuristic, message=FALSE, echo=FALSE}
-gHeuristic <- heuristic_models(Data = DataG,
+gHeuristic <- heuristic_models(Data = DataG_train,
                  var_path = "path_gran",
                  var_conv = "conversion",
                  sep =">")
@@ -724,7 +806,7 @@ gHeuristic$linear_touch <- gHeuristic$linear_touch / total_conversions * 100
 Logistic Regression
 
 ```{r regression, message=FALSE, echo=FALSE}
-Data_Log <- DataG %>%
+Data_Log <- DataG_train %>%
   select(-first_touchpoint,
          -last_touchpoint,
          -time_till_session_end,
@@ -736,7 +818,7 @@ Data_Log <- DataG %>%
          -touchpoint_length)
 
 gLog <- glm(conversion ~ Free + Ggle + Meta,
-                 data = DataG,
+                 data = DataG_train,
                  family = binomial(link = "logit"))
 summary(gLog)
 
@@ -760,7 +842,7 @@ gLog_coefficients$coefficient[gLog_coefficients$significant == 0] <- 0
 
 # Breakdown of math
 
-B_0 = 0.390416 # Intercept coefficient
+B_0 = gLog$coefficients[1] # Intercept coefficient
 
 # x = B_0 + B_Ck
 # p_ij_hat == path channel count * (1 + exp(-x))^(-1)
@@ -788,7 +870,7 @@ show(logreg_touch)
 First-order Markov Chain
 
 ```{r markov, message=FALSE, echo=FALSE}
-markov_array <- markov_model(DataG,
+markov_array <- markov_model(DataG_train,
                         var_path = 'path_gran',
                         var_conv = 'conversion',
                         var_null = 'null_conversion',
@@ -830,6 +912,7 @@ rm(ModelRates, gHeuristic, gMarkov, gLog_coefficients, markov_array, logreg_coun
 # MODELLING
 
 ## 4.3.1
+
 ```{r plot1 matrix, echo = F}
 aTrans <- aTrans %>%
   mutate(channel_from = fct_recode(channel_from,
@@ -838,7 +921,7 @@ aTrans <- aTrans %>%
                                    "Organic" = "3",
                                    "Instagram" = "4",
                                    "Facebook" = "5",
-                                   "Display" = "6",
+                                   "Direct" = "6",
                                    "Email" = "7",
                                    "Youtube" = "8"),
          channel_to = fct_recode(channel_to,
@@ -847,7 +930,7 @@ aTrans <- aTrans %>%
                                  "Organic" = "3",
                                  "Instagram" = "4",
                                  "Facebook" = "5",
-                                 "Display" = "6",
+                                 "Direct" = "6",
                                  "Email" = "7",
                                  "Youtube" = "8"))
 
@@ -874,7 +957,6 @@ ggplot(aTrans, aes(y = channel_from, x = channel_to, fill = transition_probabili
         axis.text.x = element_text(size = 8, angle = 90, hjust = 0.5, vjust = 0.5, face = "plain")) +
   ggtitle("Transition matrix heatmap")
 ```
-
 
 ```{r plot1, echo = F}
 # Channel Credit Comparison - Heuristic Models
@@ -937,7 +1019,9 @@ p2 + ggh4x::facetted_pos_scales(y = list(
   channel_name == "Instagram" ~ scale_y_continuous(limits = c(4,8))
   ))
 ```
+
 ## 4.3.2a
+
 ```{r graph}
 # MODELS
 aMarkov_tpLengths <- aMarkov_tpLengths %>%
@@ -999,6 +1083,7 @@ aMarkov_tpLengths %>%
 ```
 
 ## 4.3.2b
+
 ```{r plot1, echo = F}
 modelCompare <- left_join(model4.3.1, model4.3.2b, by = c("channel_name", "ind"))
 
@@ -1038,44 +1123,244 @@ p2 + ggh4x::facetted_pos_scales(y = list(
 ```
 
 ## 4.3.3
+
 ```{r plot1, echo = F}
-modelCompare <- left_join(model4.3.1, model4.3.2b, by = c("channel_name", "ind"))
+modelCompare2 <- rbind(model4.3.1, model4.3.3)
 
-# Channel Credit Comparison - Standard vs Collapsed
-p2 <- modelCompare %>%
-  filter(ind != "first_touch") %>%
-  filter(ind != "last_touch") %>%
-  ggplot(aes(x = ind, colour = ind)) +
-  geom_point(aes(y = values.x, alpha = "values.x"), size = 3) +
-  geom_point(aes(y = values.y, alpha = "values.y"), size = 3) +
-  theme(axis.ticks.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.title.x=element_blank()) +
-  facet_wrap( ~channel_name, scales = "free_y") +
-  labs(y = "Attribution Credit (%)",
-       y = element_blank(),
-       title = "Channel Attribution Path Size Comparison",
-       colour = "Model") +
-  scale_color_manual(values = paletteer::paletteer_d("MoMAColors::Abbott")[c(3,4,5)],
-                          labels = c("linear_touch" = "Linear",
-                                     "markov_touch" = "First-order Markov",
-                                     "logreg_touch" = "Logistic Regression")) +
-  scale_alpha_manual(
-  name = "Path Size", values = c("values.x" = 0.5, "values.y" = 1),
-  labels = c("values.x" = "Initial", "values.y" = "Collapsed"))
+modelCompare2$group <- factor(c(rep("standard", 40), rep("granulate", 15)))
 
-p2 + ggh4x::facetted_pos_scales(y = list(
-  channel_name == "Direct" ~ scale_y_continuous(limits = c(9,13)),
-  channel_name == "Email Marketing" ~ scale_y_continuous(limits = c(4,8)),
-  channel_name == "Organic" ~ scale_y_continuous(limits = c(28,32)),
-  channel_name == "Google Display" ~ scale_y_continuous(limits = c(4,8)),
-  channel_name == "Google Search" ~ scale_y_continuous(limits = c(19,23)),
-  channel_name == "Youtube" ~ scale_y_continuous(limits = c(4,8)),
-  channel_name == "Facebook" ~ scale_y_continuous(limits = c(14,18)),
-  channel_name == "Instagram" ~ scale_y_continuous(limits = c(4,8))
-  ))
+# Channel Credit Comparison - Standard vs Granulated
+mC2_model <- modelCompare2 %>%
+  group_by(channel_name, ind, group) %>%
+  summarise(total = sum(values), .groups = "drop")
+
+stack_bottom_to_top <- c(
+  "Facebook_standard", "Instagram_standard", "Youtube_standard",
+  "Google Search_standard", "Google Display_standard",
+  "Organic_standard", "Email Marketing_standard", "Direct_standard",
+  "Meta_granulate", "Google_granulate", "Free_granulate"
+)
+
+legend_order <- c(
+  "Free_granulate", "Direct_standard", "Email Marketing_standard", "Organic_standard",
+  "Google_granulate", "Google Display_standard", "Google Search_standard", "Youtube_standard",
+  "Meta_granulate", "Instagram_standard", "Facebook_standard")
+
+p3 <- mC2_model %>%
+  filter(!ind %in% c("first_touch", "last_touch")) %>%
+  mutate(
+    fill_key = interaction(channel_name, group, sep = "_"),
+    # Reverse the desired bottom-to-top order for ggplot's default stacking.
+    fill_key = factor(fill_key, levels = rev(stack_bottom_to_top)),
+    ind = recode(
+    ind,
+    "linear_touch" = "Linear",
+    "markov_touch" = "First-order Markov",
+    "logreg_touch" = "Logistic Regression")) %>%
+  ggplot(aes(x = group, y = total, fill = fill_key)) +
+  geom_col() +
+  facet_wrap(~ind) +
+  scale_fill_manual(
+    values = c(
+      "Direct_standard" = paletteer::paletteer_d("MoMAColors::Abbott")[1],
+      "Email Marketing_standard" = paletteer::paletteer_d("MoMAColors::Abbott")[2],
+      "Organic_standard" = paletteer::paletteer_d("MoMAColors::Abbott")[3],
+      "Google Display_standard" = paletteer::paletteer_d("MoMAColors::Abbott")[4],
+      "Google Search_standard" = paletteer::paletteer_d("MoMAColors::Abbott")[5],
+      "Youtube_standard" = paletteer::paletteer_d("MoMAColors::Abbott")[6],
+      "Facebook_standard" = paletteer::paletteer_d("MoMAColors::Abbott")[7],
+      "Instagram_standard" = paletteer::paletteer_d("MoMAColors::Abbott")[8],
+      "Free_granulate" = paletteer::paletteer_d("PNWColors::Shuksan2")[3],
+      "Google_granulate" = paletteer::paletteer_d("PNWColors::Shuksan2")[4],
+      "Meta_granulate" = paletteer::paletteer_d("PNWColors::Shuksan2")[5]
+    ),
+    breaks = legend_order,
+    labels = c(
+      "Free_granulate" = "FREE",
+      "Direct_standard" = "Direct",
+      "Email Marketing_standard" = "Email Marketing",
+      "Organic_standard" = "Organic",
+      "Google_granulate" = "GOOGLE",
+      "Google Display_standard" = "Google Display",
+      "Google Search_standard" = "Google Search",
+      "Youtube_standard" = "Youtube",
+      "Meta_granulate" = "META",
+      "Instagram_standard" = "Instagram",
+      "Facebook_standard" = "Facebook"
+    ),
+    name = "(GRANULATED) Channels",
+    na.value = NA
+  ) +
+  labs(x = "Group", y = "Credit (%)") +
+  theme_minimal() +
+  theme(legend.text = ggtext::element_markdown())
+
+p3
+  
 ```
 
 # Analysis
 
-# Discussion
+```{r ROC AUC, echo = F}
+# Keep rows with complete outcome and predictors
+predictor <- c("GD", "GS", "FO", "MI", "MF", "FD", "FE", "GY")
+required <- c("path", "conversion", predictor)
+
+DataA_trainROC <- DataA_train[complete.cases(DataA_train[, required]), required]
+DataA_testROC <- DataA_test[complete.cases(DataA_test[, required]), required]
+
+# -------------------------
+# 1. Logistic regression
+# -------------------------
+
+logit_model <- glm(
+  conversion ~ GD + GS + FO + MI + MF + FD + FE + GY,
+  data = DataA_trainROC,
+  family = binomial(link = "logit")
+)
+
+logit_prob <- predict(logit_model, newdata = DataA_testROC, type = "response")
+
+# -------------------------
+# 2. First-order Markov model
+# -------------------------
+
+# Assumes path values look like: "Google > Email > Direct"
+# Change this if your path uses another separator.
+path_separator <- "\\s*>\\s*"
+
+get_channels <- function(path) {
+  channels <- trimws(strsplit(as.character(path), path_separator)[[1]])
+  channels[nzchar(channels)]
+}
+
+fit_markov <- function(DataA_trainROC, smoothing = 0.5) {
+  paths <- lapply(DataA_trainROC$path, get_channels)
+  channel_states <- unique(unlist(paths))
+  
+  if (length(channel_states) == 0) {
+    stop("No channels found. Check the path format and separator.")
+  }
+  
+  conv_state <- ".__CONVERSION__."
+  no_conv_state <- ".__NO_CONVERSION__."
+  states <- c(channel_states, conv_state, no_conv_state)
+  
+  counts <- matrix(
+    0,
+    nrow = length(states),
+    ncol = length(states),
+    dimnames = list(states, states)
+  )
+  
+  # Count each channel-to-channel or channel-to-outcome transition
+  for (i in seq_len(nrow(DataA_trainROC))) {
+    terminal <- if (DataA_trainROC$conversion[i] == 1) {
+      conv_state
+    } else {
+      no_conv_state
+    }
+    
+    sequence <- c(paths[[i]], terminal)
+    
+    if (length(sequence) >= 2) {
+      for (j in seq_len(length(sequence) - 1)) {
+        counts[sequence[j], sequence[j + 1]] <-
+          counts[sequence[j], sequence[j + 1]] + 1
+      }
+    }
+  }
+  
+  # Smooth channel transition rows and make outcome states absorbing
+  P <- matrix(
+    0,
+    nrow = length(states),
+    ncol = length(states),
+    dimnames = list(states, states)
+  )
+  
+  for (state in channel_states) {
+    row_counts <- counts[state, ] + smoothing
+    P[state, ] <- row_counts / sum(row_counts)
+  }
+  
+  P[conv_state, conv_state] <- 1
+  P[no_conv_state, no_conv_state] <- 1
+  
+  # Calculate eventual conversion probability from each channel
+  Q <- P[channel_states, channel_states, drop = FALSE]
+  R <- P[channel_states, c(conv_state, no_conv_state), drop = FALSE]
+  
+  absorption <- solve(diag(length(channel_states)) - Q, R)
+  conversion_prob <- absorption[, conv_state]
+  names(conversion_prob) <- channel_states
+  
+  list(conversion_prob = conversion_prob)
+}
+
+markov_model_fit <- fit_markov(DataA_trainROC)
+
+# Score each test journey using its last channel
+train_conversion_rate <- mean(DataA_trainROC$conversion)
+
+markov_prob <- vapply(DataA_testROC$path, function(path) {
+  channels <- get_channels(path)
+  
+  if (length(channels) == 0) {
+    return(train_conversion_rate)
+  }
+  
+  last_channel <- tail(channels, 1)
+  p <- markov_model_fit$conversion_prob
+  
+  if (last_channel %in% names(p)) {
+    unname(p[last_channel])
+  } else {
+    # Fallback for a channel not seen in training
+    train_conversion_rate
+  }
+}, numeric(1))
+
+# -------------------------
+# Compare ROC AUC
+# -------------------------
+
+roc_logit <- roc(
+  response = DataA_testROC$conversion,
+  predictor = logit_prob,
+  levels = c(0, 1),
+  direction = "<",
+  quiet = TRUE
+)
+
+roc_markov <- roc(
+  response = DataA_testROC$conversion,
+  predictor = markov_prob,
+  levels = c(0, 1),
+  direction = "<",
+  quiet = TRUE
+)
+
+auc_comparison <- data.frame(
+  model = c("Logistic regression", "First-order Markov"),
+  test_auc = c(as.numeric(auc(roc_logit)), as.numeric(auc(roc_markov)))
+)
+
+auc_comparison[order(-auc_comparison$test_auc), ]
+
+# Plot both ROC curves
+plot(roc_logit, col = paletteer::paletteer_d("MoMAColors::Abbott")[1], lwd = 2,
+     main = "Test ROC Curves")
+plot(roc_markov, col = paletteer::paletteer_d("MoMAColors::Abbott")[2], lwd = 2, add = TRUE)
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+legend(
+  "bottomright",
+  legend = c(
+    paste0("LogReg Att Model AUC = ", round(auc(roc_logit), 3)),
+    paste0("Markov Att Model AUC = ", round(auc(roc_markov), 3))
+  ),
+  col = paletteer::paletteer_d("MoMAColors::Abbott")[c(1,2)],
+  lwd = 2
+)
+```
