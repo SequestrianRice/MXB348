@@ -31,8 +31,8 @@ library(ggtext)
 ## Load Data
 
 ```{r data, message=FALSE, echo=FALSE}
-journey <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/customer_journey-4.csv")
-results <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/results-3.csv")
+journey <- read_csv("./data/customer_journey-4.csv")
+results <- read_csv("./data/results-3.csv")
 ```
 
 # Feature Engineering
@@ -229,9 +229,9 @@ attgran <- attgran %>%
 
 ```{r save new datasets, message=FALSE, echo=FALSE}
 
-write.csv(attribution, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_full.csv", row.names=FALSE)
-write.csv(attcol, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_collapsed.csv", row.names=FALSE)
-write.csv(attgran, "C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_granulated.csv", row.names=FALSE)
+write.csv(attribution, "./data/attribution_full.csv", row.names=FALSE)
+write.csv(attcol, "./data/attribution_collapsed.csv", row.names=FALSE)
+write.csv(attgran, "./data/attribution_granulated.csv", row.names=FALSE)
 
 print("All done, stay swag")
 
@@ -243,9 +243,9 @@ print("All done, stay swag")
 rm(list = ls())
 
 # RELOAD DATA
-DataA <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_full.csv")
-DataC <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_collapsed.csv")
-DataG <- read_csv("C:/Uni26_Sem2/MXB348/WIL/MXB348/data/attribution_granulated.csv")
+DataA <- read_csv("./data/attribution_full.csv")
+DataC <- read_csv("./data/attribution_collapsed.csv")
+DataG <- read_csv("./data/attribution_granulated.csv")
 ```
 
 ```{r Pareto A, message=FALSE, echo=FALSE}
